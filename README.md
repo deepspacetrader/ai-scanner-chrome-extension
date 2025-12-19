@@ -55,7 +55,7 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 ```bash
 # Clone the repository
 git clone https://github.com/deepspacetrader/ai-scanner-chrome-extension.git
-cd ai-scanner-tool
+cd ai-scanner-chrome-extension
 
 # Install dependencies
 pip install -r requirements.txt
