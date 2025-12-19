@@ -1,0 +1,11 @@
+.venv
+.venv/
+.venv/*
+images/
+images/*
+extension-react/node_modules
+extension-react/node_modules/*
+extension-react/package-lock.json
+*.pt
+__pycache__
+__pycache__/*

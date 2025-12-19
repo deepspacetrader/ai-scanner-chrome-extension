@@ -1,0 +1,104 @@
+# AI Scanner Tool (Cyberpunk HUD) 🖼️⚡
+
+A high-performance, aesthetically-driven browser extension and backend server for near real-time object detection, deep analysis, and intelligent text summarization. Inspired by the "Cyberpunk 2077" scanner, this tool transforms your browsing experience with a rich, interactive HUD that provides instant insights into images and text.
+
+![AI Scanner Preview](AI-scanner-tool-screenshot1.jpg) *(Image scanner)*
+
+![AI Scanner Preview](AI-scanner-tool-screenshot2.jpg) *(Text summarizer)*
+
+## Key Features ✨
+
+### 🖥️ Cyberpunk Scanner HUD (Extension)
+- **Real-time Object Detection**: Instantly identifies objects in images you hover over using YOLO11x.
+- **Deep Identification**: Leverages Florence-2 (VLM) for detailed, context-aware descriptions of people, vehicles, animals, and more.
+- **Intelligent Refinement**: Uses a local Qwen2.5-0.5B-Instruct LLM to process raw vision data into concise, "identity-focused" HUD reports.
+- **Cyberpunk Aesthetics**: Features a dynamic reticle, and a glassmorphism HUD that follows your cursor.
+- **Text Summarization**: Highlight text on any page and hold your trigger to get a sentiment-aware summary with emoji indicators.
+- **Configurable Activation**: Choose your trigger (Shift, Ctrl, Alt, or Mouse Buttons) and toggle behavior.
+
+### 🔌 Powerful AI Backend (Server)
+- **Multi-Model Pipeline**: Orchestrates YOLO11x (Detection), Florence-2-large (VLM), and Qwen2.5 (LLM) for a comprehensive analysis.
+- **High Performance**: Optimized for GPU acceleration (RTX 4070 Super+) with FP16 precision.
+- **Centralized Object Config**: Fine-grained control over color-coding, analysis tasks (VQA vs. Captioning), and identification hints.
+- **Image Persistence**: Optional saving of scanned images for later review.
+- **CORS-Ready**: Built with FastAPI to serve the extension and any future web dashboards seamlessly.
+
+---
+
+## Tech Stack 🛠️
+
+### Frontend (Extension)
+- **Framework**: [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
+- **Build Tool**: [Vite](https://vitejs.dev/) with [CRXJS](https://crxjs.dev/vite-plugin)
+- **Styling**: [Tailwind CSS](https://tailwindcss.com/)
+- **Animations**: CSS Keyframes & Framer Motion (planned)
+
+### Backend (Server)
+- **Language**: [Python 3.12](https://www.python.org/)
+- **API Framework**: [FastAPI](https://fastapi.tiangolo.com/)
+- **Vision Models**: 
+  - [Ultralytics YOLO11x](https://github.com/ultralytics/ultralytics) (Detection)
+  - [Florence-2-large](https://huggingface.co/microsoft/Florence-2-large) (VLM)
+- **Language Model**: [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) (Summarization/Refinement)
+- **Inference**: [PyTorch](https://pytorch.org/) with CUDA
+
+---
+
+## Getting Started 🚀
+
+### 1. Prerequisites
+- **NVIDIA GPU**: Highly recommended for real-time performance (e.g., RTX 30-series or 40-series).
+- **Python 3.12** (only tested with 3.12)
+- **Node.js 18+**
+
+### 2. Setup the Server
+```bash
+# Clone the repository
+git clone https://github.com/deepspacetrader/ai-scanner-tool.git
+cd ai-scanner-tool
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the server
+py -3.12 server.py
+# Server will start on http://localhost:8001
+```
+
+### 3. Setup the Extension
+```bash
+cd extension-react
+
+# Install dependencies
+npm install
+
+# Build for development (with Hot Module Replacement)
+npm run dev
+```
+
+### 4. Load the Extension in Chrome
+1. Go to `chrome://extensions/`
+2. Enable **Developer mode** (top right).
+3. Click **Load unpacked**.
+4. Select the `extension-react/dist` folder (created after running `npm run dev` or `npm run build`).
+
+---
+
+## Usage Guide 📖
+
+1. **Activate**: Launch the extension popup to configure your **Activation Key** (default: `Alt`) and **Activation Mode** (default: `Toggle`).
+2. **Scan**: Visit any website, tap your activation key to toggle the HUD, and hover over an image.
+3. **Analyze**: The HUD will appear, showing YOLO detections. High-confidence analyzable objects (People, Cars, etc.) will trigger a deep scan using Florence-2 and Qwen2.5.
+4. **Summarize**: Highlight a block of text, ensure the HUD is active, and see the AI Scanner OS generate a concise summary.
+
+---
+
+## Configuration ⚙️
+
+### `object_config.py`
+The server uses a centralized configuration for object classes:
+- **Color**: The hex color used for bounding boxes and HUD accents.
+- **Is Analyzable**: Whether the object should trigger Deep Analysis.
+- **Category**: Grouping for summary logic (Humans, Vehicles, Animals, etc.).
+- **Task**: The Florence-2 task (`<DETAILED_CAPTION>` or `<VQA>`).
+- **Prompt**: Targeted questions for the Vision model.

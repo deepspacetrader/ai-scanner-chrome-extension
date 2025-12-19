@@ -1,0 +1,13 @@
+fastapi>=0.104.1
+requests
+numpy
+opencv-python>=4.8.1.78
+pillow>=10.1.0
+python-multipart>=0.0.6
+ultralytics>=8.0.228
+uvicorn[standard]>=0.24.0
+transformers>=4.42.3
+torch>=2.2.0
+torchvision
+einops
+accelerate

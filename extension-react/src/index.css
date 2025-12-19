@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Popup-specific styles only - this file is for the extension popup UI */
+@layer utilities {
+  .text-shadow-cyber {
+    text-shadow: 0 0 5px rgba(0, 240, 255, 0.7), 0 0 10px rgba(0, 240, 255, 0.5);
+  }
+
+  .box-shadow-cyber {
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.3), inset 0 0 20px rgba(0, 240, 255, 0.1);
+  }
+}
