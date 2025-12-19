@@ -113,3 +113,9 @@ The server uses a centralized configuration for object classes:
 - **Category**: Grouping for summary logic (Humans, Vehicles, Animals, etc.).
 - **Task**: The Florence-2 task (`<DETAILED_CAPTION>` or `<VQA>`).
 - **Prompt**: Targeted questions for the Vision model.
+
+---
+
+## License ⚖️
+
+This project is licensed under the **MIT License**. It is free to use, share, copy, and distribute. See the [LICENSE](LICENSE) file for more details.
