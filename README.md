@@ -18,7 +18,7 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 
 ### 🔌 Powerful AI Backend (Server)
 - **Multi-Model Pipeline**: Orchestrates YOLO11x (Detection), Florence-2-large (VLM), and Qwen2.5 (LLM) for a comprehensive analysis.
-- **High Performance**: Optimized for GPU acceleration (RTX 4070 Super+) with FP16 precision.
+- **High Performance**: Confirmed working well with GPU CUDA acceleration on cards with 12GB VRAM. (e.g., RTX 4070 Super+). Testing shows peaks of around 5.5GB of GPU VRAM usage.
 - **Centralized Object Config**: Fine-grained control over color-coding, analysis tasks (VQA vs. Captioning), and identification hints.
 - **Image Persistence**: Optional saving of scanned images for later review (requires an `images/` directory in the root).
 - **CORS-Ready**: Built with FastAPI to serve the extension and any future web dashboards seamlessly.
@@ -46,10 +46,13 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 
 ## Getting Started 🚀
 
+# **Note: This project requires approximately 8-10 GB of disk space for models, weights, node modules and python dependencies. So please make sure you have enough space.**
+
 ### 1. Prerequisites
-- **NVIDIA GPU**: Highly recommended for real-time performance (e.g., RTX 30-series or 40-series).
+- **NVIDIA GPU**: Highly recommended for real-time performance (e.g., RTX 30-series or 40-series) *might work on GPU cards with at least 6GB VRAM.*
 - **Python 3.12** (only tested with 3.12)
 - **Node.js 18+**
+
 
 ### 2. Setup the Server
 ```bash
