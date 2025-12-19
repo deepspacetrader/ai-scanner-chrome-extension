@@ -20,7 +20,7 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 - **Multi-Model Pipeline**: Orchestrates YOLO11x (Detection), Florence-2-large (VLM), and Qwen2.5 (LLM) for a comprehensive analysis.
 - **High Performance**: Optimized for GPU acceleration (RTX 4070 Super+) with FP16 precision.
 - **Centralized Object Config**: Fine-grained control over color-coding, analysis tasks (VQA vs. Captioning), and identification hints.
-- **Image Persistence**: Optional saving of scanned images for later review.
+- **Image Persistence**: Optional saving of scanned images for later review (requires an `images/` directory in the root).
 - **CORS-Ready**: Built with FastAPI to serve the extension and any future web dashboards seamlessly.
 
 ---
@@ -59,6 +59,14 @@ cd ai-scanner-chrome-extension
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Download YOLO11x model weights
+# Place 'yolo11x.pt' in the root directory (ai-scanner-chrome-extension/)
+# Direct Download: https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x.pt
+# (Note: Ultralytics will also auto-download this on first run if missing)
+
+# Create images folder (Optional: Required if "Save Scanned Images" is enabled)
+mkdir images
 
 # Run the server
 py -3.12 server.py
