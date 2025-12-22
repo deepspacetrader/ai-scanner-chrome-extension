@@ -104,6 +104,30 @@ export class ImageScannerService {
         }
     }
 
+    public async detectImageData(base64Data: string, save: boolean = false): Promise<DetectionResult | null> {
+        if (this.isProcessing) return null
+        this.isProcessing = true
+
+        try {
+            // The key for video frames is transient, so we create a temporary one.
+            const transientKey = `videoframe:${Date.now()}`
+            const result = await this.fetchDetection(base64Data, transientKey, save)
+
+            if (result && result.data && result.data.length > 0) {
+                result.image = base64Data
+                // We don't cache video frames as they are not static
+                return result
+            } else {
+                return null
+            }
+        } catch (e) {
+            console.error(e)
+            return null
+        } finally {
+            this.isProcessing = false
+        }
+    }
+
     private async fetchDetection(base64: string, _key: string, save: boolean = false): Promise<DetectionResult | null> {
         try {
             const response = await fetch(this.settings.detectionEndpoint, {
@@ -139,6 +163,10 @@ export class ImageScannerService {
             console.error("Analyze box error", e)
             return "Analysis error"
         }
+    }
+
+    public async captureElementScreenshot(element: Element, save: boolean = false): Promise<string | null> {
+        return this.captureAndCrop(element, save);
     }
 
     private async fetchDetectionByUrl(url: string): Promise<DetectionResult | null> {
@@ -328,7 +356,11 @@ export class ImageScannerService {
                 image.onerror = () => resolve(null)
                 image.src = response.dataUrl
             })
-        } catch (e) {
+        } catch (e: any) {
+            if (e.message.includes('Extension context invalidated')) {
+                console.warn("Extension context invalidated. Reloading page to re-inject content script.");
+                window.location.reload();
+            }
             console.error("Capture crop failed", e)
             return null
         }

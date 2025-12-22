@@ -1,54 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 import { ScanEye } from 'lucide-react'
-
-// Define types for settings logic
-interface Settings {
-  triggerInput: string;
-  detectionEndpoint: string;
-  showCrawlingLines: boolean;
-  enableSummarization: boolean;
-  summarizationEndpoint: string;
-  summarizationModel: string;
-  minSummaryChars: number;
-  toggleActivation: boolean;
-  saveScannedImages: boolean;
-  enableDeepAnalysis: boolean;
-  enableEnhancedDescription: boolean;
-  deepAnalysisThreshold: number;
-  categoryThresholds: Record<string, number>;
-  enableSound: boolean;
-  soundVolume: number;
-}
-
-const DEFAULT_SETTINGS: Settings = {
-  triggerInput: "keyboard:Alt",
-  detectionEndpoint: "http://localhost:8001/api/detect-base64",
-  showCrawlingLines: true,
-  enableSummarization: true,
-  summarizationEndpoint: "http://localhost:8001/api/summarize",
-  summarizationModel: "Qwen/Qwen2.5-0.5B-Instruct",
-  minSummaryChars: 40,
-  toggleActivation: true,
-  saveScannedImages: false,
-  enableDeepAnalysis: false,
-  enableEnhancedDescription: true,
-  deepAnalysisThreshold: 0.85,
-  categoryThresholds: {
-    "Humans": 0.85,
-    "Vehicles": 0.85,
-    "Animals": 0.85,
-    "Outdoors": 0.85,
-    "Accessories": 0.85,
-    "Sports": 0.85,
-    "Household": 0.85,
-    "Food": 0.85,
-    "Electronics": 0.85,
-    "Misc": 0.85
-  },
-  enableSound: true,
-  soundVolume: 0.5
-};
+import { type Settings, DEFAULT_SETTINGS } from './types/settings'
 
 function App() {
   const [status, setStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking')
@@ -87,7 +40,7 @@ function App() {
   }, []);
 
   const handleChange = (key: keyof Settings, value: any) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
+    setSettings((prev: Settings) => ({ ...prev, [key]: value }));
   };
 
   const saveSettings = () => {
@@ -325,14 +278,14 @@ function App() {
                     min="0"
                     max="1"
                     step="0.05"
-                    value={val}
+                    value={val as number}
                     onChange={(e) => {
                       const newThresholds = { ...settings.categoryThresholds, [cat]: parseFloat(e.target.value) };
                       handleChange('categoryThresholds', newThresholds);
                     }}
                     style={{ flex: 1 }}
                   />
-                  <span style={{ fontSize: '10px', width: '25px' }}>{(val * 100).toFixed(0)}</span>
+                  <span style={{ fontSize: '10px', width: '25px' }}>{((val as number) * 100).toFixed(0)}</span>
                 </div>
               </div>
             ))}

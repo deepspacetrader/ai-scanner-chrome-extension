@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { imageScanner, type DetectionResult } from '../services/imageScanner'
 import { type SummarySettings, textSummarizer } from '../services/textSummarizer'
 
-export function useScanner(
+export function useVideoScanner(
     isActive: boolean,
     saveScannedImages: boolean = false,
     enableDeepAnalysis: boolean = false,
@@ -11,22 +11,19 @@ export function useScanner(
     categoryThresholds: Record<string, number> = {},
     summarySettings?: SummarySettings
 ) {
-    const [hoveredElement, setHoveredElement] = useState<HTMLImageElement | HTMLVideoElement | null>(null)
+    const [hoveredVideo, setHoveredVideo] = useState<HTMLVideoElement | null>(null)
+    const hoveredVideoRef = useRef<HTMLVideoElement | null>(null)
     const [detectionResult, setDetectionResult] = useState<DetectionResult | null>(null)
     const [isScanning, setIsScanning] = useState(false)
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
     const analyzingRef = useRef<Set<string>>(new Set())
-    const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-    const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
-    const findElementUnderCursor = useCallback((e: MouseEvent) => {
+    // Find video under cursor
+    const findVideoUnderCursor = useCallback((e: MouseEvent) => {
         const elements = document.elementsFromPoint(e.clientX, e.clientY)
         for (const el of elements) {
-            if (el instanceof HTMLImageElement) {
-                return el
-            }
             if (el instanceof HTMLVideoElement) {
-                // Additional check for YouTube to avoid triggering on controls
+                // Additional check for YouTube: ensure we're not hovering over the controls
                 const videoContainer = el.closest('.html5-video-container')
                 if (videoContainer) {
                     const controls = videoContainer.querySelector('.ytp-chrome-bottom')
@@ -40,28 +37,7 @@ export function useScanner(
         return null
     }, [])
 
-    const captureFrame = useCallback((video: HTMLVideoElement): string | null => {
-        if (!canvasRef.current) {
-            canvasRef.current = document.createElement('canvas')
-        }
-        const canvas = canvasRef.current
-        // Check if video has metadata loaded
-        if (video.videoWidth === 0 || video.videoHeight === 0) {
-            return null
-        }
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        const ctx = canvas.getContext('2d')
-        if (!ctx) return null
 
-        try {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-            return canvas.toDataURL('image/jpeg', 0.9) // Use JPEG for smaller size
-        } catch (error) {
-            console.error('Error capturing video frame:', error)
-            return null
-        }
-    }, [])
 
     const triggerDeepAnalysis = useCallback(async (result: DetectionResult) => {
         if (!result.image) return
@@ -102,6 +78,7 @@ export function useScanner(
                     target.height,
                     target.type
                 )
+
                 if (!visionResult) return
 
                 let finalAnalysis = visionResult
@@ -109,12 +86,16 @@ export function useScanner(
                 const isAnalyzable = (target as any).is_analyzable
                 if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.startsWith('Error') && summarySettings) {
                     try {
-                        const refinedResult = await textSummarizer.summarize(visionResult, {
-                            ...summarySettings,
-                            mode: 'refine',
-                            category: (target as any).category || 'Misc',
-                            type: target.type
-                        } as any)
+                        const refinedResult = await textSummarizer.summarize(
+                            visionResult,
+                            {
+                                ...summarySettings,
+                                mode: 'refine',
+                                category: (target as any).category || 'Misc',
+                                type: target.type
+                            } as any
+                        )
+
                         if (refinedResult?.summary) {
                             finalAnalysis = refinedResult.summary
                         }
@@ -142,11 +123,11 @@ export function useScanner(
         }
     }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription])
 
-    const performVideoScan = useCallback(async (video: HTMLVideoElement) => {
+    const performScan = useCallback(async (video: HTMLVideoElement) => {
         setIsScanning(true)
         setDetectionResult(null)
 
-        const frameData = captureFrame(video)
+        const frameData = await imageScanner.captureElementScreenshot(video, saveScannedImages);
         if (!frameData) {
             setIsScanning(false)
             return
@@ -154,57 +135,48 @@ export function useScanner(
 
         const res = await imageScanner.detectImageData(frameData, saveScannedImages)
         
-        if (hoveredElement === video) {
+        // Only update if we are still hovering the same video
+        if (video === hoveredVideoRef.current) {
             setDetectionResult(res)
             setIsScanning(false)
+
             if (res && enableDeepAnalysis) {
                 triggerDeepAnalysis(res)
             }
         }
-    }, [captureFrame, saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis, hoveredElement])
+    }, [saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis])
 
     useEffect(() => {
         if (!isActive) {
-            setHoveredElement(null)
+            setHoveredVideo(null)
+            hoveredVideoRef.current = null
             setDetectionResult(null)
-            if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
+            setIsScanning(false)
             return
         }
 
-        const handleMouseMove = async (e: MouseEvent) => {
+        const handleMouseMove = (e: MouseEvent) => {
             setMousePos({ x: e.clientX, y: e.clientY })
+            const video = findVideoUnderCursor(e)
 
-            const el = findElementUnderCursor(e)
-
-            if (el !== hoveredElement) {
-                setHoveredElement(el)
-                setDetectionResult(null)
-                setIsScanning(false)
-                if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
-
-                if (el instanceof HTMLImageElement) {
-                    const src = imageScanner.getImageSourceKey(el)
-                    const cached = imageScanner.getCachedDetection(src)
-                    if (cached) {
-                        setDetectionResult(cached)
-                        if (enableDeepAnalysis && cached.data.some(d => (d as any).is_analyzable && d.confidence >= (categoryThresholds[(d as any).category || 'Misc'] ?? deepAnalysisThreshold) && !d.analysis)) {
-                            triggerDeepAnalysis(cached)
-                        }
-                    } else {
-                        setIsScanning(true)
-                        const res = await imageScanner.detectImage(el, saveScannedImages)
-                        if (el === findElementUnderCursor(e)) {
-                            setDetectionResult(res)
-                            setIsScanning(false)
-                            if (res && enableDeepAnalysis) {
-                                triggerDeepAnalysis(res)
-                            }
-                        }
-                    }
-                } else if (el instanceof HTMLVideoElement) {
-                    scanTimeoutRef.current = setTimeout(() => {
-                        performVideoScan(el)
-                    }, 200)
+            // Case 1: We found a paused video
+            if (video && video.paused) {
+                // Is it a new paused video?
+                if (video !== hoveredVideoRef.current) {
+                    hoveredVideoRef.current = video
+                    setHoveredVideo(video)
+                    performScan(video) // Scan immediately
+                }
+                // If it's the same paused video, do nothing. We've already scanned it.
+            } 
+            // Case 2: No video, or a playing video
+            else {
+                // Did we *just* move off a video?
+                if (hoveredVideoRef.current) {
+                    hoveredVideoRef.current = null
+                    setHoveredVideo(null)
+                    setDetectionResult(null)
+                    setIsScanning(false)
                 }
             }
         }
@@ -212,22 +184,19 @@ export function useScanner(
         window.addEventListener('mousemove', handleMouseMove)
         return () => {
             window.removeEventListener('mousemove', handleMouseMove)
-            if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
         }
-    }, [isActive, hoveredElement, findElementUnderCursor, performVideoScan, saveScannedImages, enableDeepAnalysis, categoryThresholds, deepAnalysisThreshold])
-
-    const rescan = useCallback(() => {
-        if (hoveredElement instanceof HTMLVideoElement) {
-            performVideoScan(hoveredElement)
-        }
-        // Rescan for images can be added here if needed
-    }, [hoveredElement, performVideoScan])
+    }, [isActive, findVideoUnderCursor, performScan])
 
     return {
-        hoveredElement,
+        hoveredVideo,
         detectionResult,
         isScanning,
         mousePos,
-        rescan
+        // Expose a manual trigger for retrying or refreshing
+        rescan: () => {
+            if (hoveredVideo) {
+                performScan(hoveredVideo)
+            }
+        }
     }
 }
