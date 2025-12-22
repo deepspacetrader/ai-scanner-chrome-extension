@@ -17,6 +17,8 @@ interface Settings {
   enableEnhancedDescription: boolean;
   deepAnalysisThreshold: number;
   categoryThresholds: Record<string, number>;
+  enableSound: boolean;
+  soundVolume: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -43,7 +45,9 @@ const DEFAULT_SETTINGS: Settings = {
     "Food": 0.85,
     "Electronics": 0.85,
     "Misc": 0.85
-  }
+  },
+  enableSound: true,
+  soundVolume: 0.5
 };
 
 function App() {
@@ -236,6 +240,35 @@ function App() {
             Enhanced Image Description (LLM Refinement)
           </label>
         </div>
+
+        <div className="theme-setting">
+          <label className="theme-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={settings.enableSound}
+              onChange={(e) => handleChange('enableSound', e.target.checked)}
+            />
+            Enable UI Sound Effects (ZzFX)
+          </label>
+        </div>
+
+        {settings.enableSound && (
+          <div className="theme-setting" style={{ paddingLeft: '10px', borderLeft: '2px solid #ddd' }}>
+            <label className="theme-label">Master Volume:</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={settings.soundVolume}
+                onChange={(e) => handleChange('soundVolume', parseFloat(e.target.value))}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: '12px', width: '40px' }}>{(settings.soundVolume * 100).toFixed(0)}%</span>
+            </div>
+          </div>
+        )}
 
         <div className="theme-setting">
           <label className="theme-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>

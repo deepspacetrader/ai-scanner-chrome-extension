@@ -6,6 +6,7 @@ import { useScanner } from '../hooks/useScanner'
 import { useTextSummarization } from '../hooks/useTextSummarization'
 import SummaryOverlay from './SummaryOverlay'
 import type { SummarySettings } from '../services/textSummarizer'
+import { audioService } from '../services/audioService'
 
 interface ScannerHUDProps {
     shadowRoot?: ShadowRoot
@@ -25,6 +26,8 @@ interface Settings {
     enableEnhancedDescription: boolean
     deepAnalysisThreshold: number
     categoryThresholds: Record<string, number>
+    enableSound: boolean
+    soundVolume: number
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -51,7 +54,9 @@ const DEFAULT_SETTINGS: Settings = {
         "Food": 0.85,
         "Electronics": 0.85,
         "Misc": 0.85
-    }
+    },
+    enableSound: true,
+    soundVolume: 0.5
 }
 
 const ScannerHUD: React.FC<ScannerHUDProps> = () => {
@@ -81,6 +86,33 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
         isSummarizing,
         error: summaryError,
     } = useTextSummarization(isActive && settings.enableSummarization, summarySettings)
+
+    // // 3D Tilt Logic
+    // const mouseX = useMotionValue(window.innerWidth / 2)
+    // const mouseY = useMotionValue(window.innerHeight / 2)
+
+    // Smooth spring physics for the tilt
+    // const springConfig = { damping: 20, stiffness: 100 }
+    // const rotateX = useSpring(useTransform(mouseY, [0, window.innerHeight], [5, -5]), springConfig)
+    // const rotateY = useSpring(useTransform(mouseX, [0, window.innerWidth], [-5, 5]), springConfig)
+
+    // useEffect(() => {
+    //     mouseX.set(mousePos.x)
+    //     mouseY.set(mousePos.y)
+    // }, [mousePos, mouseX, mouseY])
+
+    // Audio Triggers
+    useEffect(() => {
+        if (isScanning && settings.enableSound) {
+            audioService.playScan(settings.soundVolume)
+        }
+    }, [isScanning, settings.enableSound, settings.soundVolume])
+
+    useEffect(() => {
+        if (detectionResult && detectionResult.data.length > 0 && settings.enableSound) {
+            audioService.playLock(settings.soundVolume)
+        }
+    }, [detectionResult, settings.enableSound, settings.soundVolume])
 
     const systemStatus = isSummarizing ? 'SUMMARIZING' :
         (isMouseDown && !hoveredImage) ? 'SELECTING' :
@@ -233,7 +265,10 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
     if (!isActive) return null
 
     return (
-        <div id="ai-scanner-hud-container" className="fixed inset-0 pointer-events-none z-[99999] font-mono text-cyan-400">
+        <div
+            id="ai-scanner-hud-container"
+            className="fixed inset-0 pointer-events-none z-[99999] font-mono text-cyan-400"
+        >
             {/* Vignette / CRT Effect */}
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.25)_100%)] pointer-events-none" />
             <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay" />
@@ -434,6 +469,24 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                                             fill="none"
                                                             strokeDasharray="4 2"
                                                             className="opacity-80"
+                                                        />
+                                                        {/* Data Pulse Animation */}
+                                                        <motion.path
+                                                            initial={{ pathLength: 0, opacity: 0 }}
+                                                            animate={{
+                                                                pathLength: [0, 1],
+                                                                opacity: [0, 1, 0]
+                                                            }}
+                                                            transition={{
+                                                                duration: 1.5,
+                                                                repeat: Infinity,
+                                                                ease: "linear"
+                                                            }}
+                                                            d={`M ${startX} ${startY} L ${endX} ${endY}`}
+                                                            stroke={det.color || "#22d3ee"}
+                                                            strokeWidth="3"
+                                                            fill="none"
+                                                            className="opacity-100"
                                                         />
                                                         <circle cx={startX} cy={startY} r="3" fill={det.color || "#22d3ee"} />
                                                         <circle cx={endX} cy={endY} r="3" fill={det.color || "#22d3ee"} />

@@ -46,19 +46,19 @@ export function useScanner(
             const isAnalyzable = (d as any).is_analyzable
             const meetThreshold = d.confidence >= threshold
 
-            if (isAnalyzable && !d.analysis) {
-                console.log(`[Scanner] Checking ${d.type} (${category}): conf=${d.confidence}, threshold=${threshold}, meet=${meetThreshold}`)
-            }
+            // if (isAnalyzable && !d.analysis) {
+            //     console.log(`[Scanner] Checking ${d.type} (${category}): conf=${d.confidence}, threshold=${threshold}, meet=${meetThreshold}`)
+            // }
 
             return isAnalyzable && meetThreshold && !d.analysis
         })
 
         if (targets.length === 0) {
-            console.log(`[Scanner] No targets found for deep analysis. Total objects: ${result.data.length}`)
+            // console.log(`[Scanner] No targets found for deep analysis. Total objects: ${result.data.length}`)
             return
         }
 
-        console.log(`[Scanner] Triggering deep analysis for ${targets.length} objects`)
+        // console.log(`[Scanner] Triggering deep analysis for ${targets.length} objects`)
 
         // Use a stable key
         const analyzeKey = `${result.image.substring(0, 50)}_${targets.length}`

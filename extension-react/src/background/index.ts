@@ -1,8 +1,8 @@
-console.log("Background service worker started")
+// console.log("Background service worker started")
 
 // Listen for messages or install events
 chrome.runtime.onInstalled.addListener(() => {
-    console.log("Cyberpunk Scanner Installed")
+    // console.log("Cyberpunk Scanner Installed")
 })
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
