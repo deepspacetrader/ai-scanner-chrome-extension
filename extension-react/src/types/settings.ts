@@ -14,6 +14,7 @@ export interface Settings {
     categoryThresholds: Record<string, number>;
     enableSound: boolean;
     soundVolume: number;
+    visionModel: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -42,5 +43,6 @@ export const DEFAULT_SETTINGS: Settings = {
         "Misc": 0.85
     },
     enableSound: true,
-    soundVolume: 0.5
+    soundVolume: 0.5,
+    visionModel: 'florence2'
 };

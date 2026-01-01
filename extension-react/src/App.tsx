@@ -237,6 +237,26 @@ function App() {
         {settings.enableDeepAnalysis && (
           <div className="theme-content" style={{ paddingLeft: '10px', borderLeft: '2px solid #ddd', marginBottom: '15px' }}>
             <div className="theme-setting">
+              <label className="theme-label">Vision Model:</label>
+              <div className="theme-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: '10px' }}>
+                <div
+                  className={`theme-option ${settings.visionModel === 'florence2' ? 'selected' : ''}`}
+                  onClick={() => handleChange('visionModel', 'florence2')}
+                  style={{ fontSize: '11px' }}
+                >
+                  Florence-2
+                </div>
+                <div
+                  className={`theme-option ${settings.visionModel === 'glm4.6v' ? 'selected' : ''}`}
+                  onClick={() => handleChange('visionModel', 'glm4.6v')}
+                  style={{ fontSize: '11px' }}
+                >
+                  GLM-4.6V Flash
+                </div>
+              </div>
+            </div>
+
+            <div className="theme-setting">
               <label className="theme-label">VLM Analysis Threshold (Global):</label>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <input

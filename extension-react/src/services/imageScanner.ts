@@ -143,7 +143,15 @@ export class ImageScannerService {
         }
     }
 
-    public async analyzeBox(originalBase64: string, x: number, y: number, width: number, height: number, type: string = "person"): Promise<string | null> {
+    public async analyzeBox(
+        originalBase64: string,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        type: string = "person",
+        visionModel: string = "florence2"
+    ): Promise<string | null> {
         try {
             const endpoint = this.settings.detectionEndpoint.replace("/api/detect-base64", "/api/analyze-box")
             const response = await fetch(endpoint, {
@@ -152,13 +160,14 @@ export class ImageScannerService {
                 body: JSON.stringify({
                     image: originalBase64,
                     box: { x, y, width, height },
-                    type
+                    type,
+                    vision_model: visionModel // Pass the chosen model to the backend
                 })
             })
 
             if (!response.ok) return "Analysis failed"
             const data = await response.json()
-            return data.analysis || "No result"
+            return data.analysis || "Image analysis failed :("
         } catch (e) {
             console.error("Analyze box error", e)
             return "Analysis error"

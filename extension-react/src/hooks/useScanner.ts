@@ -9,7 +9,8 @@ export function useScanner(
     enableEnhancedDescription: boolean = true,
     deepAnalysisThreshold: number = 0.85,
     categoryThresholds: Record<string, number> = {},
-    summarySettings?: SummarySettings
+    summarySettings?: SummarySettings,
+    visionModel: string = 'florence2'
 ) {
     const [hoveredElement, setHoveredElement] = useState<HTMLImageElement | HTMLVideoElement | null>(null)
     const [detectionResult, setDetectionResult] = useState<DetectionResult | null>(null)
@@ -100,7 +101,8 @@ export function useScanner(
                     target.y,
                     target.width,
                     target.height,
-                    target.type
+                    target.type,
+                    visionModel
                 )
                 if (!visionResult) return
 
@@ -153,7 +155,7 @@ export function useScanner(
         }
 
         const res = await imageScanner.detectImageData(frameData, saveScannedImages)
-        
+
         if (hoveredElement === video) {
             setDetectionResult(res)
             setIsScanning(false)
@@ -214,7 +216,7 @@ export function useScanner(
             window.removeEventListener('mousemove', handleMouseMove)
             if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
         }
-    }, [isActive, hoveredElement, findElementUnderCursor, performVideoScan, saveScannedImages, enableDeepAnalysis, categoryThresholds, deepAnalysisThreshold])
+    }, [isActive, hoveredElement, findElementUnderCursor, performVideoScan, saveScannedImages, enableDeepAnalysis, categoryThresholds, deepAnalysisThreshold, visionModel])
 
     const rescan = useCallback(() => {
         if (hoveredElement instanceof HTMLVideoElement) {

@@ -65,10 +65,10 @@ const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
                     <div className="absolute inset-0 bg-cyan-500/20 blur-xl rounded-lg" />
 
                     {/* Main container */}
-                    <div className="relative bg-gradient-to-br from-slate-900/95 to-slate-800/95 backdrop-blur-md border border-cyan-500/40 rounded-lg shadow-2xl max-w-[360px] min-w-[260px]">
+                    <div className="relative bg-[#0d1117] border border-cyan-500/50 rounded-lg shadow-[0_0_30px_rgba(0,0,0,0.6)] max-w-[360px] min-w-[260px]">
                         {/* Animated border effect */}
                         <div className="absolute inset-0 rounded-lg overflow-hidden">
-                            <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/0 via-cyan-500/30 to-cyan-500/0 animate-pulse" />
+                            <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/0 via-cyan-500/10 to-cyan-500/0 animate-pulse" style={{ background: '#00131b' }} />
                         </div>
 
                         {/* Content */}
@@ -81,15 +81,15 @@ const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
                                 </span>
                             </div>
 
-                            {/* Preview */}
+                            {/* Preview
                             {selection.preview && (
-                                <div className="text-xs text-slate-400 leading-relaxed line-clamp-3 font-mono">
+                                <div className="text-xs text-slate-300 leading-relaxed line-clamp-3 font-mono">
                                     {selection.preview}
                                 </div>
-                            )}
+                            )} */}
 
                             {/* Summary content - scrollable */}
-                            <div className="min-h-[60px] max-h-[200px] overflow-y-auto pointer-events-auto scrollbar-thin scrollbar-thumb-cyan-500/50 scrollbar-track-transparent">
+                            <div className="min-h-[60px] max-h-[200px] overflow-y-auto pointer-events-auto scrollbar-thin scrollbar-thumb-cyan-500/50 scrollbar-track-transparent" style={{ borderTop: '1px solid rgb(103, 232, 249)', scrollbarWidth: 'thin', scrollbarColor: 'rgb(103, 232, 249) transparent', marginTop: '0' }}>
                                 {error ? (
                                     <div className="flex items-start gap-2 text-red-400 text-sm">
                                         <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -105,7 +105,7 @@ const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
                                         <span className="animate-pulse">Analyzing patterns…</span>
                                     </div>
                                 ) : (
-                                    <div className="text-sm text-slate-400 italic">
+                                    <div className="text-sm text-slate-300 italic">
                                         Highlight text and hold the trigger key to summarize.
                                     </div>
                                 )}

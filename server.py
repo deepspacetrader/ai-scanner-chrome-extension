@@ -39,6 +39,10 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # Set dtype based on device availability
 dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
+# GLM-4.6V-Flash via LM Studio configuration
+LM_STUDIO_URL = "http://localhost:1234/v1"
+GLM_MODEL_ID = "zai-org/glm-4.6v-flash"
+
 logger.info(f"Using device: {device} with dtype: {dtype}")
 
 @asynccontextmanager
@@ -125,11 +129,12 @@ async def get_status():
         "status": "ready",
         "models": {
             "yolo": "YOLO11x",
-            "vlm": "Florence-2-large" if florence_model else "none",
+            "vlm": "Florence-2-large",
+            "vision_glm": "zai-org/glm-4.6v-flash (external via LM Studio)",
             "summarizer": "Qwen2.5-0.5B-Instruct" if summarizer_model else "none"
         },
         "device": device,
-        "message": "Ultralytics YOLO, Florence-2, and Qwen service ready"
+        "message": "AI Scanner Ready: YOLO11x, Florence-2 and GLM-4.6V Flash (LM Studio)"
     }
 
 @app.get("/api/config/objects")
@@ -444,23 +449,32 @@ async def analyze_box(request: Dict[str, Any]):
         task = config["task"]
         hint = config["prompt"]
         
-        # CRITICAL: For <DETAILED_CAPTION>, the token MUST be the only text.
-        # Otherwise the processor fails.
-        if task == "<DETAILED_CAPTION>":
-            hint = ""
+        # New: Model selection
+        vision_model = request.get("vision_model", "florence2")
+        logger.info(f"Analyzing box with model: {vision_model}")
         
-        # For standard captioning tasks, extra text hints can sometimes cause errors
-        # in some model versions, so we use VQA when a question is needed.
-        florence_results = await run_florence_analysis(cropped_image, task, text_input=hint)
-        
-        analysis_text = ""
-        # Handle results based on task type
-        if task == "<VQA>":
-            analysis_text = florence_results.get("<VQA>", "No answer")
-        elif task in florence_results:
-            analysis_text = florence_results[task]
+        if vision_model == "glm4.6v":
+            # GLM 4.6V prefers specific prompts
+            glm_prompt = config.get("llm_query") or f"Describe this {obj_type} in detail."
+            analysis_text = await run_glm_analysis(cropped_image, glm_prompt)
         else:
-            # Fallback to any result
+            # Default to Florence-2
+            # CRITICAL: For <DETAILED_CAPTION>, the token MUST be the only text.
+            # Otherwise the processor fails.
+            if task == "<DETAILED_CAPTION>":
+                hint = ""
+            
+            # For standard captioning tasks, extra text hints can sometimes cause errors
+            florence_results = await run_florence_analysis(cropped_image, task, text_input=hint)
+            
+           # analysis_text = ""
+            # Handle results based on task type
+            #if task == "<MORE_DETAILED_CAPTION>":
+            #    analysis_text = florence_results.get("<DETAILED_CAPTION>", "No answer")
+            #elif task in florence_results:
+             #   analysis_text = florence_results[task]
+            #else:
+                # Fallback to any result
             analysis_text = next(iter(florence_results.values())) if florence_results else "No analysis result"
             
         return {"analysis": analysis_text}
@@ -472,7 +486,7 @@ async def analyze_box(request: Dict[str, Any]):
 @app.post("/api/summarize")
 async def summarize_text(request: Dict[str, Any]):
     """
-    Summarize text using Qwen2.5-0.5B-Instruct
+    Summarize text using
     """
     global summarizer_model, summarizer_tokenizer, current_summarize_id
     
@@ -493,7 +507,7 @@ async def summarize_text(request: Dict[str, Any]):
         category = request.get("category", "Misc")
         obj_type = request.get("type")
         
-        # Base system prompt for Qwen - Neutral and performance-oriented
+        # Base system prompt for Text Summarization - Neutral and performance-oriented
         system_prompt = request.get("system_prompt") or (
             "You are the AI Scanner OS. Direct, cold, and factual. "
             "Skip all 'thinking' and preamble. Do not use phrases like 'The image shows' or 'Here is a summary'. "
@@ -527,7 +541,7 @@ async def summarize_text(request: Dict[str, Any]):
         else:
             # Standard website text summarization
             query = (
-                "TASK: Summarize the text with the following structure:\n"
+                "TASK: Translate to English then summarize the text with the following structure:\n"
                 "1. Start with 1 to 5 emojis max which represent the sentiment of the text (no words allowed in first section only emojis).\n"
                 "2. Next add a new line with separator '------'.\n"
                 "3. Finally write the 30-100 word summary about the SOURCE TEXT.\n"
@@ -722,6 +736,66 @@ async def process_detections(image, results, deep_analysis=False):
             "category": det.get("category", "Misc")
         })
     return response_data
+
+async def run_glm_analysis(image, prompt):
+    """Call GLM-4.6V-Flash via LM Studio API"""
+    try:
+        # Convert image to base64
+        buffered = io.BytesIO()
+        image.save(buffered, format="JPEG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        
+        payload = {
+            "model": GLM_MODEL_ID,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are AI Scanner Vision System. Direct, cold, and factual. Skip all thinking, reasoning, and preamble. Output only the final identification data. Maximum 15 words."
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_b64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.1337,
+            "max_tokens": 1024,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "logprobs": False,
+            "top_logprobs": None
+        }
+        
+        logger.info(f"Calling LM Studio GLM API at {LM_STUDIO_URL}/chat/completions")
+        # Use requests since it's already used in the project
+        response = requests.post(f"{LM_STUDIO_URL}/chat/completions", json=payload, timeout=45)
+        response.raise_for_status()
+        result = response.json()
+        
+        if 'choices' in result and len(result['choices']) > 0:
+            content = result['choices'][0]['message']['content'].strip()
+            # Emergency filter for thinking tags and GLM special box tags
+            import re
+            content = re.sub(r'<think>[\s\S]*?<\/think>', '', content, flags=re.IGNORECASE)
+            content = re.sub(r'<thinking>[\s\S]*?<\/thinking>', '', content, flags=re.IGNORECASE)
+            content = re.sub(r'<\|begin_of_box\|>[\s\S]*?<\|end_of_box\|>', '', content) # Remove box coordinates
+            content = content.replace('<|begin_of_box|>', '').replace('<|end_of_box|>', '')
+            return content.strip()
+        else:
+            logger.error(f"Unexpected GLM response format: {result}")
+            return "Error: Unexpected response format from GLM"
+            
+    except Exception as e:
+        logger.error(f"GLM analysis failed: {e}")
+        return f"GLM Error: Check LM Studio connection. ({str(e)[:50]})"
 
 async def run_florence_analysis(image, task_prompt, text_input=None):
     """Helper function to run Florence-2 analysis with robust error handling"""

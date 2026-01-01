@@ -9,7 +9,8 @@ export function useVideoScanner(
     enableEnhancedDescription: boolean = true,
     deepAnalysisThreshold: number = 0.85,
     categoryThresholds: Record<string, number> = {},
-    summarySettings?: SummarySettings
+    summarySettings?: SummarySettings,
+    visionModel: string = 'florence2'
 ) {
     const [hoveredVideo, setHoveredVideo] = useState<HTMLVideoElement | null>(null)
     const hoveredVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -76,7 +77,8 @@ export function useVideoScanner(
                     target.y,
                     target.width,
                     target.height,
-                    target.type
+                    target.type,
+                    visionModel
                 )
 
                 if (!visionResult) return
@@ -134,7 +136,7 @@ export function useVideoScanner(
         }
 
         const res = await imageScanner.detectImageData(frameData, saveScannedImages)
-        
+
         // Only update if we are still hovering the same video
         if (video === hoveredVideoRef.current) {
             setDetectionResult(res)
@@ -144,7 +146,7 @@ export function useVideoScanner(
                 triggerDeepAnalysis(res)
             }
         }
-    }, [saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis])
+    }, [saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis, visionModel])
 
     useEffect(() => {
         if (!isActive) {
@@ -168,7 +170,7 @@ export function useVideoScanner(
                     performScan(video) // Scan immediately
                 }
                 // If it's the same paused video, do nothing. We've already scanned it.
-            } 
+            }
             // Case 2: No video, or a playing video
             else {
                 // Did we *just* move off a video?

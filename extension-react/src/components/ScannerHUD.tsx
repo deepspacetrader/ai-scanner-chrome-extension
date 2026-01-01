@@ -38,7 +38,8 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
         settings.enableEnhancedDescription,
         settings.deepAnalysisThreshold,
         settings.categoryThresholds,
-        summarySettings
+        summarySettings,
+        settings.visionModel
     )
 
     // Scanner for videos
@@ -54,7 +55,8 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
         settings.enableEnhancedDescription,
         settings.deepAnalysisThreshold,
         settings.categoryThresholds,
-        summarySettings
+        summarySettings,
+        settings.visionModel
     );
 
     const hoveredImage = imageHoveredElement instanceof HTMLImageElement ? imageHoveredElement : null;
@@ -367,8 +369,8 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                             </div>
                         </div>
 
-                        {/* On-video detection results */}
-                        {hoveredVideo && detectionResult?.data.map((det, idx) => {
+                        {/* Detection results for both images and videos */}
+                        {(hoveredImage || hoveredVideo) && detectionResult?.data.map((det, idx) => {
                             const x = (det.x / 100) * reticleWidth
                             const y = (det.y / 100) * reticleHeight
                             const w = (det.width / 100) * reticleWidth
@@ -376,7 +378,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
 
                             return (
                                 <div
-                                    key={idx}
+                                    key={`yolo-box-${idx}`}
                                     className="absolute"
                                     style={{
                                         left: x,

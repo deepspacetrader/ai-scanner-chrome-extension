@@ -84,7 +84,7 @@ cd extension-react
 npm install
 
 # Build for development (with Hot Module Replacement)
-npm run dev
+npm run build
 ```
 
 ### 4. Load the Extension in Chrome
