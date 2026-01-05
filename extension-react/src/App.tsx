@@ -85,14 +85,9 @@ function App() {
     }
   };
 
-  const triggerOptions = [
-    { label: 'Shift', value: 'keyboard:Shift' },
-    { label: 'Ctrl', value: 'keyboard:Control' },
-    { label: 'Alt', value: 'keyboard:Alt' },
-    { label: 'Left Click', value: 'mouse:0' },
-    { label: 'Middle Click', value: 'mouse:1' },
-    { label: 'Right Click', value: 'mouse:2' },
-  ];
+  // const triggerOptions = [
+  //   { label: 'Alt', value: 'keyboard:Alt' },
+  // ];
 
   return (
     <div className="theme-container">
@@ -128,7 +123,7 @@ function App() {
           />
         </div>
 
-        <div className="theme-setting">
+        {/* <div className="theme-setting">
           <label className="theme-label">Activation Method:</label>
           <div className="theme-grid">
             {triggerOptions.map((opt) => (
@@ -141,7 +136,7 @@ function App() {
               </div>
             ))}
           </div>
-        </div>
+        </div> */}
 
         <div className="theme-setting">
           <label className="theme-label">Activation Mode:</label>
@@ -150,26 +145,15 @@ function App() {
               className={`theme-option ${!settings.toggleActivation ? 'selected' : ''}`}
               onClick={() => handleChange('toggleActivation', false)}
             >
-              Hold
+              Hold Alt
             </div>
             <div
               className={`theme-option ${settings.toggleActivation ? 'selected' : ''}`}
               onClick={() => handleChange('toggleActivation', true)}
             >
-              Toggle
+              Toggle Alt
             </div>
           </div>
-        </div>
-
-        <div className="theme-setting">
-          <label className="theme-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={settings.showCrawlingLines}
-              onChange={(e) => handleChange('showCrawlingLines', e.target.checked)}
-            />
-            Show crawling lines
-          </label>
         </div>
 
         <div className="theme-setting">
@@ -230,7 +214,7 @@ function App() {
               checked={settings.enableDeepAnalysis}
               onChange={(e) => handleChange('enableDeepAnalysis', e.target.checked)}
             />
-            Enable Deep Analysis (Florence-2)
+            Enable Image Analysis
           </label>
         </div>
 
@@ -238,20 +222,27 @@ function App() {
           <div className="theme-content" style={{ paddingLeft: '10px', borderLeft: '2px solid #ddd', marginBottom: '15px' }}>
             <div className="theme-setting">
               <label className="theme-label">Vision Model:</label>
-              <div className="theme-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: '10px' }}>
+              <div className="theme-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: '10px' }}>
                 <div
                   className={`theme-option ${settings.visionModel === 'florence2' ? 'selected' : ''}`}
                   onClick={() => handleChange('visionModel', 'florence2')}
                   style={{ fontSize: '11px' }}
                 >
-                  Florence-2
+                  Florence-2 (Fast)
                 </div>
                 <div
                   className={`theme-option ${settings.visionModel === 'glm4.6v' ? 'selected' : ''}`}
                   onClick={() => handleChange('visionModel', 'glm4.6v')}
                   style={{ fontSize: '11px' }}
                 >
-                  GLM-4.6V Flash
+                  Qwen2-VL (Local)
+                </div>
+                <div
+                  className={`theme-option ${settings.visionModel === 'samsung-trm' ? 'selected' : ''}`}
+                  onClick={() => handleChange('visionModel', 'samsung-trm')}
+                  style={{ fontSize: '11px' }}
+                >
+                  Samsung-TRM (Deep)
                 </div>
               </div>
             </div>

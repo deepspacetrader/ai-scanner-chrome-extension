@@ -103,10 +103,11 @@ export function useScanner(
                     target.height,
                     target.type,
                     visionModel
-                )
+                ) as any
                 if (!visionResult) return
 
-                let finalAnalysis = visionResult
+                let finalAnalysis = visionResult.analysis || visionResult
+                let analysisModel = visionResult.model || (visionModel === 'glm4.6v' ? 'Qwen2-VL' : 'Florence-2')
 
                 const isAnalyzable = (target as any).is_analyzable
                 if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.startsWith('Error') && summarySettings) {
@@ -131,7 +132,7 @@ export function useScanner(
                         ...prev,
                         data: prev.data.map(d =>
                             (d.x === target.x && d.y === target.y && d.type === target.type)
-                                ? { ...d, analysis: finalAnalysis }
+                                ? { ...d, analysis: finalAnalysis, model: analysisModel }
                                 : d
                         )
                     }
@@ -142,7 +143,7 @@ export function useScanner(
                 analyzingRef.current.delete(analyzeKey)
             }, 1000)
         }
-    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription])
+    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription, visionModel])
 
     const performVideoScan = useCallback(async (video: HTMLVideoElement) => {
         setIsScanning(true)

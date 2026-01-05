@@ -19,6 +19,7 @@ export interface DetectionResult {
         color: string
         type: string
         analysis?: string
+        model?: string
         confidence: number
     }[]
     total_objects: number
@@ -34,8 +35,7 @@ export class ImageScannerService {
 
     // Settings - could be injectable
     private settings = {
-        detectionEndpoint: "http://localhost:8001/api/detect-base64",
-        showCrawlingLines: true,
+        detectionEndpoint: "http://localhost:8001/api/detect-base64"
     }
 
     constructor() { }
@@ -87,7 +87,7 @@ export class ImageScannerService {
                 result = await this.fetchDetectionByUrl(srcKey)
             }
 
-            if (result && result.data && result.data.length > 0) {
+            if (result) {
                 result.image = base64 || undefined
                 this.cacheResult(srcKey, result)
                 return result
@@ -113,7 +113,7 @@ export class ImageScannerService {
             const transientKey = `videoframe:${Date.now()}`
             const result = await this.fetchDetection(base64Data, transientKey, save)
 
-            if (result && result.data && result.data.length > 0) {
+            if (result) {
                 result.image = base64Data
                 // We don't cache video frames as they are not static
                 return result

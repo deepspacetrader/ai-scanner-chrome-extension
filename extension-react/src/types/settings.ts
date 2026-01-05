@@ -1,7 +1,6 @@
 export interface Settings {
     triggerInput: string;
     detectionEndpoint: string;
-    showCrawlingLines: boolean;
     enableSummarization: boolean;
     summarizationEndpoint: string;
     summarizationModel: string;
@@ -20,10 +19,9 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
     triggerInput: "keyboard:Alt",
     detectionEndpoint: "http://localhost:8001/api/detect-base64",
-    showCrawlingLines: true,
     enableSummarization: true,
     summarizationEndpoint: "http://localhost:8001/api/summarize",
-    summarizationModel: "Qwen/Qwen2.5-0.5B-Instruct",
+    summarizationModel: "zai-org/glm-4.6v-flash",
     minSummaryChars: 40,
     toggleActivation: true,
     saveScannedImages: false,
@@ -31,18 +29,18 @@ export const DEFAULT_SETTINGS: Settings = {
     enableEnhancedDescription: true,
     deepAnalysisThreshold: 0.85,
     categoryThresholds: {
-        "Humans": 0.85,
-        "Vehicles": 0.85,
-        "Animals": 0.85,
-        "Outdoors": 0.85,
-        "Accessories": 0.85,
-        "Sports": 0.85,
-        "Household": 0.85,
-        "Food": 0.85,
-        "Electronics": 0.85,
-        "Misc": 0.85
+        "Humans": 0.70,
+        "Vehicles": 0.90,
+        "Animals": 0.90,
+        "Outdoors": 0.90,
+        "Accessories": 0.90,
+        "Sports": 0.90,
+        "Household": 0.90,
+        "Food": 0.90,
+        "Electronics": 0.90,
+        "Misc": 0.90
     },
     enableSound: true,
-    soundVolume: 0.5,
+    soundVolume: 1,
     visionModel: 'florence2'
 };

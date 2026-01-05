@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Brain, X, Target, Loader2, CheckCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useScanner } from '../hooks/useScanner'
@@ -97,11 +97,43 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
         if (isSummarizing) return 'SUMMARIZING';
         if (isMouseDown && !hoveredElement) return 'SELECTING';
         if (isHoveringText) return 'TEXT';
-        if (hoveredElement) return 'READY';
+        if (hoveredElement) return 'SCANNING';
         return 'IDLE';
     };
 
     const systemStatus = getSystemStatus()
+
+    const getSidebarLayout = useCallback(() => {
+        if (!hoveredElement) return { className: 'left-full top-0 ml-12', style: {} };
+
+        const rect = hoveredElement.getBoundingClientRect();
+        const sidebarWidth = 320;
+        const margin = 24;
+        const windowWidth = window.innerWidth;
+
+        const isScene = detectionResult?.data.some(d => d.type === 'scene');
+
+        // Special logic for "scene" or very large elements
+        if (isScene || rect.width > windowWidth * 0.75) {
+            const spaceRight = windowWidth - rect.right;
+            const spaceLeft = rect.left;
+
+            if (spaceRight >= sidebarWidth + margin) {
+                return { className: 'left-full top-0 ml-8', style: { width: `${sidebarWidth}px` } };
+            } else if (spaceLeft >= sidebarWidth + margin) {
+                return { className: 'right-full top-0 mr-8', style: { width: `${sidebarWidth}px` } };
+            } else {
+                // Position underneath if no room on sides or if extremely wide
+                return {
+                    className: 'top-full left-1/2 -translate-x-1/2 mt-8',
+                    style: { width: `min(94vw, 600px)`, maxWidth: '800px' }
+                };
+            }
+        }
+
+        // Default behavior for small/medium YOLO objects
+        return { className: 'left-full top-0 ml-12', style: { width: `${sidebarWidth}px` } };
+    }, [hoveredElement, detectionResult]);
 
     // Load settings from chrome storage and listen for changes
     useEffect(() => {
@@ -385,8 +417,8 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                         top: y,
                                         width: w,
                                         height: h,
-                                        border: `2px solid ${det.color}`,
-                                        backgroundColor: `${det.color}26`,
+                                        border: det.type === 'scene' ? '1px dashed rgba(34, 211, 238, 0.3)' : `2px solid ${det.color}`,
+                                        backgroundColor: det.type === 'scene' ? 'transparent' : `${det.color}26`,
                                     }}
                                 >
                                     <div
@@ -420,12 +452,13 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                                 const boxCenterY = ((det.y + det.height / 2) / 100) * reticleHeight;
                                                 const boxRightEdgeX = ((det.x + det.width) / 100) * reticleWidth;
 
-                                                const labelCenterY = idx * (90 + 24) + 45;
+                                                const labelCenterY = idx * (120 + 24) + 60; // Increased spacing for long text
 
-                                                const startX = boxRightEdgeX - reticleWidth;
+                                                // If it's a scene detection (fullscreen), we draw lines from the center-ish
+                                                const startX = det.type === 'scene' ? (reticleWidth / 2) - (reticleWidth / 2) : boxRightEdgeX - reticleWidth;
                                                 const startY = boxCenterY;
 
-                                                const endX = 48;
+                                                const endX = det.type === 'scene' ? 200 : 48; // Adjust sidebars for scenes
                                                 const endY = labelCenterY;
 
                                                 return (
@@ -471,55 +504,64 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                         </AnimatePresence>
                                     </svg>
 
-                                    <div className="absolute left-full top-0 ml-12 flex flex-col gap-6 w-64 pointer-events-auto">
-                                        <AnimatePresence mode="popLayout">
-                                            {analyzableDetections.map((det, idx) => (
-                                                <motion.div
-                                                    key={`label-${det.type}-${det.x}-${det.y}`}
-                                                    initial={{ opacity: 0, x: 20 }}
-                                                    animate={{ opacity: 1, x: 0 }}
-                                                    exit={{ opacity: 0, x: 20 }}
-                                                    transition={{ duration: 0.3, delay: idx * 0.05 }}
-                                                    className="relative flex flex-col gap-1 p-3 transform"
-                                                    style={{
-                                                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
-                                                        color: det.color || '#22d3ee',
-                                                        border: `1px solid ${det.color || '#22d3ee'}44`,
-                                                        borderLeft: `4px solid ${det.color || '#22d3ee'}`,
-                                                        backdropFilter: 'blur(8px)',
-                                                        boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
-                                                        minHeight: '90px'
-                                                    }}
-                                                >
-                                                    <div className="flex items-center justify-between border-b border-white/10 pb-1 mb-1 text-[10px] uppercase font-bold tracking-tighter">
-                                                        <div className="flex items-center gap-2">
-                                                            <Brain className="w-3 h-3" />
-                                                            <span>{det.type} IDENTITY</span>
-                                                        </div>
-                                                        <span className="opacity-60">CONF: {(det.confidence * 100).toFixed(0)}%</span>
-                                                    </div>
-
-                                                    <div className="normal-case italic text-cyan-50 text-[11px] leading-relaxed">
-                                                        {det.analysis === '...' ? (
-                                                            <div className="flex flex-col gap-2 py-1">
-                                                                <span className="flex items-center gap-2 text-[8px] uppercase tracking-tighter opacity-70">
-                                                                    <span className="w-2 h-2 bg-yellow-400 rounded-full animate-ping-pong" />
-                                                                    ACQUIRING DETAILS...
-                                                                </span>
-                                                                <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden relative">
-                                                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-yellow-400 to-transparent w-2/3 animate-progress-indefinite" />
+                                    {(() => {
+                                        const layout = getSidebarLayout();
+                                        return (
+                                            <div
+                                                className={`absolute flex flex-col gap-6 pointer-events-auto ${layout.className}`}
+                                                style={layout.style}
+                                            >
+                                                <AnimatePresence mode="popLayout">
+                                                    {analyzableDetections.map((det, idx) => (
+                                                        <motion.div
+                                                            key={`label-${det.type}-${det.x}-${det.y}`}
+                                                            initial={{ opacity: 0, x: 20 }}
+                                                            animate={{ opacity: 1, x: 0 }}
+                                                            exit={{ opacity: 0, x: 20 }}
+                                                            transition={{ duration: 0.3, delay: idx * 0.05 }}
+                                                            className="relative flex flex-col gap-1 p-3 transform"
+                                                            style={{
+                                                                backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                                                                color: det.color || '#22d3ee',
+                                                                border: `1px solid ${det.color || '#22d3ee'}44`,
+                                                                borderLeft: `4px solid ${det.color || '#22d3ee'}`,
+                                                                backdropFilter: 'blur(8px)',
+                                                                boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
+                                                                minHeight: '100px',
+                                                                maxHeight: '400px'
+                                                            }}
+                                                        >
+                                                            <div className="flex items-center justify-between border-b border-white/10 pb-1 mb-1 text-[10px] uppercase font-bold tracking-tighter">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Brain className="w-3 h-3" />
+                                                                    <span>{det.type} IDENTITY</span>
                                                                 </div>
+                                                                <span className="opacity-60">CONF: {(det.confidence * 100).toFixed(0)}%</span>
                                                             </div>
-                                                        ) : (
-                                                            <div className="animate-in fade-in slide-in-from-top-1 duration-500">
-                                                                {det.analysis}
+
+                                                            <div className="normal-case italic text-cyan-50 text-[12px] leading-relaxed max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-cyan-500/50 pr-2">
+                                                                {det.analysis === '...' ? (
+                                                                    <div className="flex flex-col gap-2 py-1">
+                                                                        <span className="flex items-center gap-2 text-[8px] uppercase tracking-tighter opacity-70">
+                                                                            <span className="w-2 h-2 bg-yellow-400 rounded-full animate-ping-pong" />
+                                                                            ACQUIRING DETAILS...
+                                                                        </span>
+                                                                        <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden relative">
+                                                                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-yellow-400 to-transparent w-2/3 animate-progress-indefinite" />
+                                                                        </div>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="animate-in fade-in slide-in-from-top-1 duration-500 whitespace-pre-wrap">
+                                                                        {det.analysis}
+                                                                    </div>
+                                                                )}
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                </motion.div>
-                                            ))}
-                                        </AnimatePresence>
-                                    </div>
+                                                        </motion.div>
+                                                    ))}
+                                                </AnimatePresence>
+                                            </div>
+                                        );
+                                    })()}
                                 </>
                             );
                         })()}
@@ -589,55 +631,64 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                         </AnimatePresence>
                                     </svg>
 
-                                    <div className="absolute left-full top-0 ml-12 flex flex-col gap-6 w-64 pointer-events-auto">
-                                        <AnimatePresence mode="popLayout">
-                                            {analyzableDetections.map((det, idx) => (
-                                                <motion.div
-                                                    key={`label-${det.type}-${det.x}-${det.y}`}
-                                                    initial={{ opacity: 0, x: 20 }}
-                                                    animate={{ opacity: 1, x: 0 }}
-                                                    exit={{ opacity: 0, x: 20 }}
-                                                    transition={{ duration: 0.3, delay: idx * 0.05 }}
-                                                    className="relative flex flex-col gap-1 p-3 transform"
-                                                    style={{
-                                                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
-                                                        color: det.color || '#22d3ee',
-                                                        border: `1px solid ${det.color || '#22d3ee'}44`,
-                                                        borderLeft: `4px solid ${det.color || '#22d3ee'}`,
-                                                        backdropFilter: 'blur(8px)',
-                                                        boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
-                                                        minHeight: '90px'
-                                                    }}
-                                                >
-                                                    <div className="flex items-center justify-between border-b border-white/10 pb-1 mb-1 text-[10px] uppercase font-bold tracking-tighter">
-                                                        <div className="flex items-center gap-2">
-                                                            <Target className="w-3 h-3" />
-                                                            <span>{det.type}</span>
-                                                        </div>
-                                                        <span className="opacity-60">CONF: {(det.confidence * 100).toFixed(0)}%</span>
-                                                    </div>
-
-                                                    <div className="normal-case italic text-cyan-50 text-[11px] leading-relaxed">
-                                                        {det.analysis === '...' ? (
-                                                            <div className="flex flex-col gap-2 py-1">
-                                                                <span className="flex items-center gap-2 text-[8px] uppercase tracking-tighter opacity-70">
-                                                                    <span className="w-2 h-2 bg-yellow-400 rounded-full animate-ping-pong" />
-                                                                    ANALYZING...
-                                                                </span>
-                                                                <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden relative">
-                                                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-yellow-400 to-transparent w-2/3 animate-progress-indefinite" />
+                                    {(() => {
+                                        const layout = getSidebarLayout();
+                                        return (
+                                            <div
+                                                className={`absolute flex flex-col gap-6 pointer-events-auto ${layout.className}`}
+                                                style={layout.style}
+                                            >
+                                                <AnimatePresence mode="popLayout">
+                                                    {analyzableDetections.map((det, idx) => (
+                                                        <motion.div
+                                                            key={`label-${det.type}-${det.x}-${det.y}`}
+                                                            initial={{ opacity: 0, x: 20 }}
+                                                            animate={{ opacity: 1, x: 0 }}
+                                                            exit={{ opacity: 0, x: 20 }}
+                                                            transition={{ duration: 0.3, delay: idx * 0.05 }}
+                                                            className="relative flex flex-col gap-1 p-3 transform"
+                                                            style={{
+                                                                backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                                                                color: det.color || '#22d3ee',
+                                                                border: `1px solid ${det.color || '#22d3ee'}44`,
+                                                                borderLeft: `4px solid ${det.color || '#22d3ee'}`,
+                                                                backdropFilter: 'blur(8px)',
+                                                                boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
+                                                                minHeight: '100px',
+                                                                maxHeight: '400px'
+                                                            }}
+                                                        >
+                                                            <div className="flex items-center justify-between border-b border-white/10 pb-1 mb-1 text-[10px] uppercase font-bold tracking-tighter">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Target className="w-3 h-3" />
+                                                                    <span>{det.type}</span>
                                                                 </div>
+                                                                <span className="opacity-60">CONF: {(det.confidence * 100).toFixed(0)}%</span>
                                                             </div>
-                                                        ) : (
-                                                            <div className="animate-in fade-in slide-in-from-top-1 duration-500">
-                                                                {det.analysis || 'No detailed analysis.'}
+
+                                                            <div className="normal-case italic text-cyan-50 text-[12px] leading-relaxed max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-cyan-500/50 pr-2">
+                                                                {det.analysis === '...' ? (
+                                                                    <div className="flex flex-col gap-2 py-1">
+                                                                        <span className="flex items-center gap-2 text-[8px] uppercase tracking-tighter opacity-70">
+                                                                            <span className="w-2 h-2 bg-yellow-400 rounded-full animate-ping-pong" />
+                                                                            ANALYZING...
+                                                                        </span>
+                                                                        <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden relative">
+                                                                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-yellow-400 to-transparent w-2/3 animate-progress-indefinite" />
+                                                                        </div>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="animate-in fade-in slide-in-from-top-1 duration-500 whitespace-pre-wrap">
+                                                                        {det.analysis || 'No detailed analysis.'}
+                                                                    </div>
+                                                                )}
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                </motion.div>
-                                            ))}
-                                        </AnimatePresence>
-                                    </div>
+                                                        </motion.div>
+                                                    ))}
+                                                </AnimatePresence>
+                                            </div>
+                                        );
+                                    })()}
                                 </>
                             );
                         })()}

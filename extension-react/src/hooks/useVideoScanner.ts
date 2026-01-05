@@ -79,14 +79,17 @@ export function useVideoScanner(
                     target.height,
                     target.type,
                     visionModel
-                )
+                ) as any
 
                 if (!visionResult) return
 
-                let finalAnalysis = visionResult
+                let finalAnalysis = visionResult.analysis || visionResult
+                let analysisModel = visionResult.model || (visionModel === 'glm4.6v' ? 'Qwen2-VL' : 'Florence-2')
 
                 const isAnalyzable = (target as any).is_analyzable
-                if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.startsWith('Error') && summarySettings) {
+                const isHighFidelity = analysisModel.includes('Samsung') || analysisModel.includes('Qwen2-VL')
+
+                if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.startsWith('Error') && summarySettings && !isHighFidelity) {
                     try {
                         const refinedResult = await textSummarizer.summarize(
                             visionResult,
@@ -112,7 +115,7 @@ export function useVideoScanner(
                         ...prev,
                         data: prev.data.map(d =>
                             (d.x === target.x && d.y === target.y && d.type === target.type)
-                                ? { ...d, analysis: finalAnalysis }
+                                ? { ...d, analysis: finalAnalysis, model: analysisModel }
                                 : d
                         )
                     }
@@ -123,7 +126,7 @@ export function useVideoScanner(
                 analyzingRef.current.delete(analyzeKey)
             }, 1000)
         }
-    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription])
+    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription, visionModel])
 
     const performScan = useCallback(async (video: HTMLVideoElement) => {
         setIsScanning(true)

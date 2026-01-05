@@ -14,7 +14,6 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 - **Intelligent Refinement**: Uses a local Qwen2.5-0.5B-Instruct LLM to process raw vision data into concise, "identity-focused" HUD reports.
 - **Cyberpunk Aesthetics**: Features a dynamic reticle, and a glassmorphism HUD that follows your cursor.
 - **Text Summarization**: Highlight text on any page and hold your trigger to get a sentiment-aware summary with emoji indicators.
-- **Configurable Activation**: Choose your trigger (Shift, Ctrl, Alt, or Mouse Buttons) and toggle behavior.
 
 ### 🔌 Powerful AI Backend (Server)
 - **Multi-Model Pipeline**: Orchestrates YOLO11x (Detection), Florence-2-large (VLM), and Qwen2.5 (LLM) for a comprehensive analysis.
