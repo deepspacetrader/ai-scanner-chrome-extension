@@ -6,6 +6,9 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 
 ![AI Scanner Preview](AI-scanner-tool-screenshot2.jpg) *(Text summarizer)*
 
+![AI Scanner Preview](AI-scanner-tool-screenshot3.jpg) *(Identification)*
+
+
 ## Key Features ✨
 
 ### 🖥️ Cyberpunk Scanner HUD (Extension)
