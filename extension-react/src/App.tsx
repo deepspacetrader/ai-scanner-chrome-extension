@@ -43,10 +43,47 @@ function App() {
     setSettings((prev: Settings) => ({ ...prev, [key]: value }));
   };
 
-  const saveSettings = () => {
+  const saveSettings = async () => {
     if (chrome?.storage?.sync) {
-      chrome.storage.sync.set(settings, () => {
+      chrome.storage.sync.set(settings, async () => {
         setMessage('Settings saved successfully!');
+
+        // Switch model on backend if detection model changed
+        try {
+          const statusUrl = settings.detectionEndpoint.replace("/api/detect-base64", "/api/models");
+          const modelsResponse = await fetch(statusUrl);
+          if (modelsResponse.ok) {
+            const modelsData = await modelsResponse.json();
+            
+            // Only switch if backend model is different from setting
+            if (modelsData.current_model !== settings.detectionModel) {
+              const switchUrl = settings.detectionEndpoint.replace("/api/detect-base64", "/api/models/switch");
+              const switchResponse = await fetch(switchUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  model_type: settings.detectionModel
+                })
+              });
+              
+              if (switchResponse.ok) {
+                const switchResult = await switchResponse.json();
+                console.log('Model switched successfully:', switchResult.message);
+                setMessage(`Settings saved! ${switchResult.message}`);
+              } else {
+                console.error('Failed to switch model');
+                setMessage('Settings saved, but model switch failed');
+              }
+            } else {
+              console.log('Model already matches setting');
+            }
+          }
+        } catch (error) {
+          console.error('Error switching model:', error);
+          setMessage('Settings saved, but model switch failed');
+        }
 
         const hasEndpoint = Boolean(settings.detectionEndpoint && settings.detectionEndpoint.trim());
         let iconState = 'images';
@@ -56,7 +93,7 @@ function App() {
 
         chrome.runtime.sendMessage({ type: "UPDATE_ICON_STATE", state: iconState });
 
-        setTimeout(() => setMessage(''), 3000);
+        setTimeout(() => setMessage(''), 5000);
       });
     } else {
       setMessage('Settings saved (mock)!');
@@ -69,7 +106,17 @@ function App() {
       const statusUrl = endpoint.replace("/api/detect-base64", "/api/status");
       const res = await fetch(statusUrl);
       if (res.ok) {
+        const statusData = await res.json();
         setStatus('connected');
+        
+        // Update settings with current model from backend if different
+        if (statusData.models?.yolo && statusData.models?.yolo_type) {
+          const backendModel = statusData.models.yolo_type;
+          if (backendModel !== settings.detectionModel) {
+            console.log(`Backend model (${backendModel}) differs from setting (${settings.detectionModel}), updating...`);
+            handleChange('detectionModel', backendModel);
+          }
+        }
       } else {
         setStatus('disconnected');
       }
@@ -121,6 +168,30 @@ function App() {
             onChange={(e) => handleChange('detectionEndpoint', e.target.value)}
             placeholder="http://localhost:8001/api/detect-base64"
           />
+        </div>
+
+        <div className="theme-setting">
+          <label className="theme-label">Detection Model:</label>
+          <div className="theme-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+            <div
+              className={`theme-option ${settings.detectionModel === 'detection' ? 'selected' : ''}`}
+              onClick={() => handleChange('detectionModel', 'detection')}
+            >
+              YOLO26x (Detection)
+              <span style={{ fontSize: '10px', display: 'block', marginTop: '2px', opacity: 0.7 }}>
+                Faster, bounding boxes only
+              </span>
+            </div>
+            <div
+              className={`theme-option ${settings.detectionModel === 'segmentation' ? 'selected' : ''}`}
+              onClick={() => handleChange('detectionModel', 'segmentation')}
+            >
+              YOLO26x-seg (Segmentation)
+              <span style={{ fontSize: '10px', display: 'block', marginTop: '2px', opacity: 0.7 }}>
+                Slower, includes masks
+              </span>
+            </div>
+          </div>
         </div>
 
         {/* <div className="theme-setting">
@@ -342,7 +413,8 @@ function App() {
         <div className="theme-setting">
           <label className="theme-label">Connection Status:</label>
           <div className={`theme-status ${status}`}>
-            {status === 'connected' ? 'Connected to YOLO server' :
+            {status === 'connected' ? 
+              `Connected to YOLO server (${settings.detectionModel === 'segmentation' ? 'YOLO26x-seg' : 'YOLO26x'})` :
               status === 'checking' ? 'Checking...' :
                 'Disconnected - check API URL'}
           </div>

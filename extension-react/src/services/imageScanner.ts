@@ -7,11 +7,19 @@ export interface DetectionBox {
         x2: number
         y2: number
     }
+    mask?: {
+        data: number[][]
+        x: number
+        y: number
+        width: number
+        height: number
+    }
 }
 
 export interface DetectionResult {
-    type: 'detection'
-    data: {
+    type: 'detection' | 'segmentation'  // Add response type
+    model?: string  // Add model name
+    data: Array<{
         x: number
         y: number
         width: number
@@ -21,7 +29,16 @@ export interface DetectionResult {
         analysis?: string
         model?: string
         confidence: number
-    }[]
+        is_analyzable?: boolean
+        category?: string
+        mask?: {
+            data: number[][]
+            x: number
+            y: number
+            width: number
+            height: number
+        }
+    }>
     total_objects: number
     image?: string
 }
@@ -32,13 +49,34 @@ export class ImageScannerService {
     private failedDetectionCooldowns = new Map<string, number>()
     private detectionRetryDelayMs = 1500
     private isProcessing = false
+    private settings: any = {}
 
-    // Settings - could be injectable
-    private settings = {
-        detectionEndpoint: "http://localhost:8001/api/detect-base64"
+    constructor() {
+        this.loadSettings()
     }
 
-    constructor() { }
+    private async loadSettings() {
+        if (chrome?.storage?.sync) {
+            try {
+                const result = await chrome.storage.sync.get(['detectionEndpoint', 'detectionModel'])
+                this.settings = {
+                    detectionEndpoint: result.detectionEndpoint || "http://localhost:8001/api/detect-base64",
+                    detectionModel: result.detectionModel || "segmentation"
+                }
+            } catch (error) {
+                console.error('Failed to load settings:', error)
+                this.settings = {
+                    detectionEndpoint: "http://localhost:8001/api/detect-base64",
+                    detectionModel: "segmentation"
+                }
+            }
+        } else {
+            this.settings = {
+                detectionEndpoint: "http://localhost:8001/api/detect-base64",
+                detectionModel: "segmentation"
+            }
+        }
+    }
 
     public getCachedDetection(srcKey: string): DetectionResult | undefined {
         return this.detectionCache.get(srcKey)
@@ -62,6 +100,9 @@ export class ImageScannerService {
     }
 
     public async detectImage(img: HTMLImageElement | Element, save: boolean = false): Promise<DetectionResult | null> {
+        // Ensure settings are loaded
+        await this.loadSettings()
+        
         const srcKey = this.getImageSourceKey(img)
         if (!srcKey) return null
 
@@ -105,6 +146,9 @@ export class ImageScannerService {
     }
 
     public async detectImageData(base64Data: string, save: boolean = false): Promise<DetectionResult | null> {
+        // Ensure settings are loaded
+        await this.loadSettings()
+        
         if (this.isProcessing) return null
         this.isProcessing = true
 
@@ -136,9 +180,61 @@ export class ImageScannerService {
                 body: JSON.stringify({ image: base64, save })
             })
             if (!response.ok) throw new Error("API Error")
-            return await response.json()
+            const apiResponse = await response.json()
+            
+            // Transform API response to frontend format
+            const result: DetectionResult = {
+                type: apiResponse.type || 'detection',
+                model: apiResponse.model,
+                total_objects: apiResponse.total_objects || 0,
+                data: [],
+                image: base64
+            }
+            
+            // Process each detected object
+            if (apiResponse.data && Array.isArray(apiResponse.data)) {
+                // console.log(`Processing ${apiResponse.data.length} detections from API`)
+                result.data = apiResponse.data.map((item: any, index: number) => {
+                    const hasMask = !!item.mask
+                    const maskInfo = hasMask ? {
+                        hasMask: true,
+                        hasData: !!item.mask.data,
+                        maskShape: item.mask.data ? `${item.mask.data.length}x${item.mask.data[0]?.length}` : 'none',
+                        maskPosition: { x: item.mask.x, y: item.mask.y, w: item.mask.width, h: item.mask.height }
+                    } : { hasMask: false }
+                    
+                    console.log(`AI SCANNER: Detection ${index}:`, {
+                        type: item.class || item.type,
+                        ...maskInfo
+                    })
+                    
+                    // Handle both old format (direct bbox) and new format (nested bbox)
+                    const bbox = item.bbox || (item.x !== undefined ? {
+                        x1: item.x,
+                        y1: item.y,
+                        x2: item.x + (item.width || 0),
+                        y2: item.y + (item.height || 0)
+                    } : item.bbox)
+                    
+                    return {
+                        x: bbox.x1,
+                        y: bbox.y1,
+                        width: bbox.x2 - bbox.x1,
+                        height: bbox.y2 - bbox.y1,
+                        color: item.color || "#00FF00",
+                        type: item.class || item.type || "unknown",
+                        analysis: item.analysis,
+                        model: item.model,
+                        confidence: item.confidence || 0,
+                        mask: item.mask  // Include mask data if available
+                    }
+                })
+                // console.log('Final processed detections:', result.data)
+            }
+            
+            return result
         } catch (e) {
-            console.error("Detection API error", e)
+            console.error("AI SCANNER: Detection API error", e)
             return null
         }
     }
@@ -152,6 +248,9 @@ export class ImageScannerService {
         type: string = "person",
         visionModel: string = "florence2"
     ): Promise<string | null> {
+        // Ensure settings are loaded
+        await this.loadSettings()
+        
         try {
             const endpoint = this.settings.detectionEndpoint.replace("/api/detect-base64", "/api/analyze-box")
             const response = await fetch(endpoint, {
@@ -169,7 +268,7 @@ export class ImageScannerService {
             const data = await response.json()
             return data.analysis || "Image analysis failed :("
         } catch (e) {
-            console.error("Analyze box error", e)
+            console.error("AI SCANNER: Analyze box error", e)
             return "Analysis error"
         }
     }
@@ -189,7 +288,7 @@ export class ImageScannerService {
             if (!response.ok) throw new Error("API Error")
             return await response.json()
         } catch (e) {
-            console.error("URL Detection API error", e)
+            console.error("AI SCANNER: URL Detection API error", e)
             return null
         }
     }

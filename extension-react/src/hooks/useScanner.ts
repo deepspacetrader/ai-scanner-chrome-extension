@@ -71,7 +71,9 @@ export function useScanner(
             const category = (d as any).category || "Misc"
             const threshold = categoryThresholds[category] ?? deepAnalysisThreshold
             const isAnalyzable = (d as any).is_analyzable
-            return isAnalyzable && d.confidence >= threshold && !d.analysis
+            const isScene = d.type === 'scene'
+            // Only analyze scenes or high-confidence objects
+            return isAnalyzable && (isScene || (d.confidence >= threshold && !d.analysis))
         })
 
         if (targets.length === 0) return
@@ -88,7 +90,9 @@ export function useScanner(
                     const category = (d as any).category || "Misc"
                     const threshold = categoryThresholds[category] ?? deepAnalysisThreshold
                     const isAnalyzable = (d as any).is_analyzable
-                    return (isAnalyzable && d.confidence >= threshold && !d.analysis) ? { ...d, analysis: '...' } : d
+                    const isScene = d.type === 'scene'
+                    // Only show "..." placeholder for scenes and high-confidence objects that are being analyzed
+                    return (isAnalyzable && (isScene || (d.confidence >= threshold && !d.analysis))) ? { ...d, analysis: '...' } : d
                 })
             }
         })
@@ -190,7 +194,13 @@ export function useScanner(
                     const cached = imageScanner.getCachedDetection(src)
                     if (cached) {
                         setDetectionResult(cached)
-                        if (enableDeepAnalysis && cached.data.some(d => (d as any).is_analyzable && d.confidence >= (categoryThresholds[(d as any).category || 'Misc'] ?? deepAnalysisThreshold) && !d.analysis)) {
+                        if (enableDeepAnalysis && cached.data.some(d => {
+                            const isAnalyzable = (d as any).is_analyzable
+                            const isScene = d.type === 'scene'
+                            const category = (d as any).category || 'Misc'
+                            const threshold = categoryThresholds[category] ?? deepAnalysisThreshold
+                            return isAnalyzable && (isScene || (d.confidence >= threshold && !d.analysis))
+                        })) {
                             triggerDeepAnalysis(cached)
                         }
                     } else {

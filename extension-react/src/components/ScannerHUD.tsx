@@ -408,29 +408,93 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                             const w = (det.width / 100) * reticleWidth
                             const h = (det.height / 100) * reticleHeight
 
+                            // Debug logging for masks
+                            if (det.mask) {
+                                console.log(`AI SCANNER: Rendering mask for detection ${idx}:`, {
+                                    type: det.type,
+                                    hasData: !!det.mask.data,
+                                    maskShape: det.mask.data ? `${det.mask.data.length}x${det.mask.data[0]?.length}` : 'none',
+                                    maskPosition: { x: det.mask.x, y: det.mask.y, w: det.mask.width, h: det.mask.height },
+                                    boundingBox: { x, y, w, h }
+                                })
+                            }
+
                             return (
-                                <div
-                                    key={`yolo-box-${idx}`}
-                                    className="absolute"
-                                    style={{
-                                        left: x,
-                                        top: y,
-                                        width: w,
-                                        height: h,
-                                        border: det.type === 'scene' ? '1px dashed rgba(34, 211, 238, 0.3)' : `2px solid ${det.color}`,
-                                        backgroundColor: det.type === 'scene' ? 'transparent' : `${det.color}26`,
-                                    }}
-                                >
+                                <div key={`yolo-box-${idx}`}>
+                                    {/* Render segmentation mask if available */}
+                                    {det.mask && det.mask.data && (
+                                        <div
+                                            className="absolute"
+                                            style={{
+                                                left: (det.mask!.x / 100) * reticleWidth,
+                                                top: (det.mask!.y / 100) * reticleHeight,
+                                                width: (det.mask!.width / 100) * reticleWidth,
+                                                height: (det.mask!.height / 100) * reticleHeight,
+                                            }}
+                                        >
+                                            <svg
+                                                width={(det.mask!.width / 100) * reticleWidth}
+                                                height={(det.mask!.height / 100) * reticleHeight}
+                                                className="absolute inset-0"
+                                                style={{ overflow: 'visible' }}
+                                            >
+                                                {/* Render mask as filled polygons */}
+                                                {det.mask!.data.map((row, rowIdx) => {
+                                                    const maskWidth = det.mask!.data[0].length
+                                                    const maskHeight = det.mask!.data.length
+                                                    const pixelWidth = ((det.mask!.width / 100) * reticleWidth) / maskWidth
+                                                    const pixelHeight = ((det.mask!.height / 100) * reticleHeight) / maskHeight
+
+                                                    return row.map((pixel, colIdx) => {
+                                                        if (pixel > 0.5) { // Threshold for mask visibility
+                                                            const px = colIdx * pixelWidth
+                                                            const py = rowIdx * pixelHeight
+                                                            
+                                                            return (
+                                                                <rect
+                                                                    key={`mask-pixel-${rowIdx}-${colIdx}`}
+                                                                    x={px}
+                                                                    y={py}
+                                                                    width={pixelWidth}
+                                                                    height={pixelHeight}
+                                                                    fill={det.color || "#22d3ee"}
+                                                                    fillOpacity={0.3}
+                                                                    stroke={det.color || "#22d3ee"}
+                                                                    strokeWidth={0.5}
+                                                                    strokeOpacity={0.6}
+                                                                />
+                                                            )
+                                                        }
+                                                        return null
+                                                    })
+                                                })}
+                                            </svg>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Bounding box overlay */}
                                     <div
-                                        className="absolute -top-5 left-0 text-[10px] px-2 py-0.5 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap"
+                                        className="absolute"
                                         style={{
-                                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                                            color: det.color,
-                                            border: `1px solid ${det.color}66`
+                                            left: x,
+                                            top: y,
+                                            width: w,
+                                            height: h,
+                                            border: det.type === 'scene' ? '1px dashed rgba(34, 211, 238, 0.3)' : `2px solid ${det.color}`,
+                                            backgroundColor: det.type === 'scene' ? 'transparent' : `${det.color}26`,
                                         }}
                                     >
-                                        <Target className="w-2.5 h-2.5" />
-                                        {det.type} {(det.confidence * 100).toFixed(0)}%
+                                        <div
+                                            className="absolute -top-5 left-0 text-[10px] px-2 py-0.5 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap"
+                                            style={{
+                                                backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                                                color: det.color,
+                                                border: `1px solid ${det.color}66`
+                                            }}
+                                        >
+                                            <Target className="w-2.5 h-2.5" />
+                                            {det.type} {(det.confidence * 100).toFixed(0)}%
+                                        </div>
                                     </div>
                                 </div>
                             )
@@ -440,9 +504,26 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                         {hoveredImage && (() => {
                             if (!detectionResult?.data) return null;
 
+                            // TEMP: Show all detections to test - remove filtering
                             const analyzableDetections = detectionResult.data
-                                .filter(d => !!d.analysis)
+                                //.filter(d => {
+                                //    const isScene = d.type === 'scene'
+                                //    const category = d.category || "Misc"
+                                //    const threshold = settings.categoryThresholds?.[category] ?? settings.deepAnalysisThreshold
+                                //    const isAnalyzable = d.is_analyzable
+                                //    console.log(`Detection filter - type: ${d.type}, confidence: ${d.confidence}, threshold: ${threshold}, isAnalyzable: ${isAnalyzable}, isScene: ${isScene}, passes: ${isAnalyzable && (isScene || (d.confidence >= threshold))}`)
+                                //    // Show scenes always, or high-confidence objects
+                                //    return isAnalyzable && (isScene || (d.confidence >= threshold))
+                                //})
                                 .sort((a, b) => a.y - b.y);
+                            
+                            // Debug: Log what detections have analysis
+                            console.log('AI SCANNER: Image detections with analysis:', analyzableDetections.filter(d => !!d.analysis).length, 'out of', detectionResult.data.length);
+                            console.log('AI SCANNER: All image detections:', detectionResult.data.map(d => ({
+                                type: d.type,
+                                hasAnalysis: !!d.analysis,
+                                analysis: d.analysis ? d.analysis.substring(0, 50) + '...' : 'none'
+                            })));
 
                             return (
                                 <>
@@ -569,8 +650,23 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                         {/* On-video analysis sidebar and lines */}
                         {hoveredVideo && detectionResult?.data && (() => {
                             const analyzableDetections = detectionResult.data
-                                .filter(d => d.confidence > 0) // Show all detections
+                                //.filter(d => {
+                                //    const isScene = d.type === 'scene'
+                                //    const category = d.category || "Misc"
+                                //    const threshold = settings.categoryThresholds?.[category] ?? settings.deepAnalysisThreshold
+                                //    const isAnalyzable = d.is_analyzable
+                                //    // Show scenes always, or high-confidence objects
+                                //    return isAnalyzable && (isScene || (d.confidence >= threshold))
+                                //})
                                 .sort((a, b) => a.y - b.y);
+                            
+                            // Debug: Log what video detections have analysis
+                            console.log('Video detections with analysis:', analyzableDetections.filter(d => !!d.analysis).length, 'out of', detectionResult.data.length);
+                            console.log('All video detections:', detectionResult.data.map(d => ({
+                                type: d.type,
+                                hasAnalysis: !!d.analysis,
+                                analysis: d.analysis ? d.analysis.substring(0, 50) + '...' : 'none'
+                            })));
 
                             return (
                                 <>
@@ -679,7 +775,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                                                     </div>
                                                                 ) : (
                                                                     <div className="animate-in fade-in slide-in-from-top-1 duration-500 whitespace-pre-wrap">
-                                                                        {det.analysis || 'No detailed analysis.'}
+                                                                        {det.analysis || 'No detailed analysis available'}
                                                                     </div>
                                                                 )}
                                                             </div>

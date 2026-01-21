@@ -12,14 +12,14 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 ## Key Features ✨
 
 ### 🖥️ Cyberpunk Scanner HUD (Extension)
-- **Real-time Object Detection**: Instantly identifies objects in images you hover over using YOLO11x.
+- **Real-time Object Detection**: Instantly identifies objects in images you hover over using YOLO26x-seg.
 - **Deep Identification**: Leverages Florence-2 (VLM) for detailed, context-aware descriptions of people, vehicles, animals, and more.
 - **Intelligent Refinement**: Uses a local Qwen2.5-0.5B-Instruct LLM to process raw vision data into concise, "identity-focused" HUD reports.
 - **Cyberpunk Aesthetics**: Features a dynamic reticle, and a glassmorphism HUD that follows your cursor.
 - **Text Summarization**: Highlight text on any page and hold your trigger to get a sentiment-aware summary with emoji indicators.
 
 ### 🔌 Powerful AI Backend (Server)
-- **Multi-Model Pipeline**: Orchestrates YOLO11x (Detection), Florence-2-large (VLM), and Qwen2.5 (LLM) for a comprehensive analysis.
+- **Multi-Model Pipeline**: Orchestrates YOLO26x-seg (Detection), Florence-2-large (VLM), and Qwen2.5 (LLM) for a comprehensive analysis.
 - **High Performance**: Confirmed working well with GPU CUDA acceleration on cards with 12GB VRAM. (e.g., RTX 4070 Super+). Testing shows peaks of around 5.5GB of GPU VRAM usage.
 - **Centralized Object Config**: Fine-grained control over color-coding, analysis tasks (VQA vs. Captioning), and identification hints.
 - **Image Persistence**: Optional saving of scanned images for later review (requires an `images/` directory in the root).
@@ -39,7 +39,7 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 - **Language**: [Python 3.12](https://www.python.org/)
 - **API Framework**: [FastAPI](https://fastapi.tiangolo.com/)
 - **Vision Models**: 
-  - [Ultralytics YOLO11x](https://github.com/ultralytics/ultralytics) (Detection)
+  - [Ultralytics YOLO26x-seg](https://github.com/ultralytics/ultralytics) (Detection)
   - [Florence-2-large](https://huggingface.co/microsoft/Florence-2-large) (VLM)
 - **Language Model**: [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) (Summarization/Refinement)
 - **Inference**: [PyTorch](https://pytorch.org/) with CUDA
@@ -65,9 +65,9 @@ cd ai-scanner-chrome-extension
 # Install dependencies
 pip install -r requirements.txt
 
-# Download YOLO11x model weights
-# Place 'yolo11x.pt' in the root directory (ai-scanner-chrome-extension/)
-# Direct Download: https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x.pt
+# Download YOLO26x-seg model weights
+# Place 'YOLO26x-seg.pt' in the root directory (ai-scanner-chrome-extension/)
+# Direct Download: https://github.com/ultralytics/assets/releases/download/v8.3.0/YOLO26x-seg.pt
 # (Note: Ultralytics will also auto-download this on first run if missing)
 
 # Create images folder (Optional: Required if "Save Scanned Images" is enabled)

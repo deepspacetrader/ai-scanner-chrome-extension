@@ -14,6 +14,7 @@ import hashlib
 from typing import Dict, Any
 
 import numpy as np
+import cv2
 import torch
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -40,6 +41,25 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # Set dtype based on device availability
 dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
+# Model configuration
+# YOLO26 models now supported with updated ultralytics
+AVAILABLE_MODELS = {
+    "detection": {
+        "name": "YOLO26x",
+        "model_file": "yolo26x.pt",
+        "description": "Object detection only (YOLO26)"
+    },
+    "segmentation": {
+        "name": "YOLO26x-seg", 
+        "model_file": "yolo26x-seg.pt",
+        "description": "Object detection with segmentation masks (YOLO26)"
+    }
+}
+
+# Current model settings (can be changed via API)
+current_model_type = "segmentation"  # Default to segmentation
+current_model_config = AVAILABLE_MODELS[current_model_type]
+
 # GLM-Edge/Qwen-VL Local Model configuration
 GLM_LOCAL_MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 vision_model_obj = None
@@ -52,11 +72,11 @@ async def lifespan(app: FastAPI):
     # Startup
     global yolo_model, florence_model, florence_processor, summarizer_model, summarizer_tokenizer, vision_model_obj, vision_processor_obj, samsung_trm_model
     try:
-        # Load YOLO first and be EXPLICIT about the device to avoid CPU fallback
-        logger.info("Loading YOLO11x model...")
-        yolo_model = YOLO('yolo11x.pt')
+        # Load YOLO model based on current configuration
+        logger.info(f"Loading {current_model_config['name']} model...")
+        yolo_model = YOLO(current_model_config['model_file'])
         yolo_model.to(device)
-        logger.info(f"YOLO11x model loaded successfully on {device}")
+        logger.info(f"{current_model_config['name']} model loaded successfully on {device}")
 
         # Load Qwen2.5-0.5B-Instruct for extreme speed on RTX 4070 Super.
         # At 0.5B params in FP16, it uses ~1.1GB VRAM and generates almost instantly.
@@ -141,20 +161,65 @@ async def get_status():
     return {
         "status": "ready",
         "models": {
-            "yolo": "YOLO11x",
+            "yolo": current_model_config['name'],
+            "yolo_type": current_model_type,
             "vlm": "Florence-2-large",
             "vision_glm": "Qwen2-VL-2B-Instruct (Local)",
             "samsung_trm": "wtfmahe/Samsung-TRM (reasoning)",
             "summarizer": "Qwen2.5-0.5B-Instruct" if summarizer_model else "none"
         },
         "device": device,
-        "message": "AI Scanner Ready: YOLO11x, Florence-2, GLM-Edge-V and TRM Reasoning Core"
+        "message": f"AI Scanner Ready: {current_model_config['name']}, Florence-2, GLM-Edge-V and TRM Reasoning Core"
     }
 
 @app.get("/api/config/objects")
 async def get_object_config():
     """Get the full object configuration for the frontend"""
     return OBJECT_CONFIG
+
+@app.get("/api/models")
+async def get_available_models():
+    """Get available YOLO models and current model configuration"""
+    return {
+        "available_models": AVAILABLE_MODELS,
+        "current_model": current_model_type,
+        "current_config": current_model_config
+    }
+
+@app.post("/api/models/switch")
+async def switch_model(request: Dict[str, Any]):
+    """Switch between detection and segmentation models"""
+    global current_model_type, current_model_config, yolo_model
+    
+    try:
+        new_model_type = request.get("model_type")
+        if new_model_type not in AVAILABLE_MODELS:
+            raise HTTPException(status_code=400, detail=f"Invalid model type: {new_model_type}")
+        
+        if new_model_type == current_model_type:
+            return {"status": "unchanged", "message": f"Already using {current_model_config['name']}"}
+        
+        # Update configuration
+        current_model_type = new_model_type
+        current_model_config = AVAILABLE_MODELS[current_model_type]
+        
+        # Load new model
+        logger.info(f"Switching to {current_model_config['name']}...")
+        yolo_model = YOLO(current_model_config['model_file'])
+        yolo_model.to(device)
+        
+        logger.info(f"Successfully switched to {current_model_config['name']}")
+        
+        return {
+            "status": "success",
+            "message": f"Switched to {current_model_config['name']}",
+            "current_model": current_model_type,
+            "current_config": current_model_config
+        }
+        
+    except Exception as e:
+        logger.error(f"Model switch failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Model switch failed: {str(e)}")
 
 @app.post("/api/save-image")
 async def save_image(request: Dict[str, Any]):
@@ -235,13 +300,15 @@ async def save_image(request: Dict[str, Any]):
 @app.post("/api/detect")
 async def detect_objects(file: UploadFile = File(...)):
     """
-    Detect objects in uploaded image using YOLO11
+    Detect objects in uploaded image using current YOLO model
+    Supports both detection (yolo26x.pt) and segmentation (yolo26x-seg.pt)
 
     Expects:
     - Image file (JPEG, PNG, etc.)
 
     Returns:
-    - JSON with detected objects, bounding boxes, confidence scores, and class names
+    - JSON with detected objects, bounding boxes, confidence scores, class names
+    - Includes segmentation masks if using segmentation model
     """
     global yolo_model
 
@@ -256,21 +323,119 @@ async def detect_objects(file: UploadFile = File(...)):
         # Convert PIL to numpy array for YOLO
         image_np = np.array(image)
 
-        # Run YOLO detection - restricted to people only (class 0)
+        # Run YOLO detection/segmentation - restricted to people only (class 0)
         results = yolo_model(image_np, classes=[0])
 
-        # Process results - SHOW ALL OBJECTS
+        # Process results based on current model type
+        is_segmentation = current_model_type == "segmentation"
+        logger.info(f"Processing results with model type: {current_model_type} (is_segmentation: {is_segmentation})")
         detections = []
+        
         for result in results:
             boxes = result.boxes
+            masks = result.masks if is_segmentation else None
+            logger.info(f"Boxes found: {boxes is not None}, Masks found: {masks is not None}")
+            
             if boxes is not None:
-                for box in boxes:
+                logger.info(f"Number of boxes: {len(boxes)}")
+                if masks is not None:
+                    logger.info(f"Number of masks: {len(masks.data)}")
+                for i, box in enumerate(boxes):
                     # Get confidence and class
                     confidence = float(box.conf[0].cpu().numpy())
                     class_id = int(box.cls[0].cpu().numpy())
                     class_name = yolo_model.names[class_id]
                     # Get bounding box coordinates
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+
+                    # Get segmentation mask if available
+                    mask_data = None
+                    if is_segmentation and masks is not None and i < len(masks.data):
+                        # Convert mask to binary format for frontend
+                        mask_tensor = masks.data[i].cpu().numpy()
+                        logger.info(f"Mask tensor shape: {mask_tensor.shape}")
+                        
+                        # Get mask position and scale information
+                        # YOLO masks.xy contains polygon coordinates, not bounding box
+                        # We need to calculate the bounding box from the polygon points
+                        try:
+                            mask_polygon = masks.xy[i][0].cpu().numpy()
+                            logger.info(f"Raw mask polygon shape: {mask_polygon.shape}")
+                            logger.info(f"First few polygon points: {mask_polygon[:5]}")
+                            
+                            # Calculate mask bounding box in absolute image coordinates
+                            mask_abs_x1 = np.min(mask_polygon[:, 0])
+                            mask_abs_y1 = np.min(mask_polygon[:, 1])
+                            mask_abs_x2 = np.max(mask_polygon[:, 0])
+                            mask_abs_y2 = np.max(mask_polygon[:, 1])
+                            
+                            logger.info(f"Calculated mask bbox in absolute coords: x1={mask_abs_x1}, y1={mask_abs_y1}, x2={mask_abs_x2}, y2={mask_abs_y2}")
+                            logger.info(f"Detection bbox: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+                            logger.info(f"Image dimensions: width={img_width}, height={img_height}")
+                            
+                            # Convert mask coordinates to percentages of the full image
+                            mask_info = {
+                                "data": mask_data,
+                                "x": float(round((mask_abs_x1 / img_width) * 100, 2)),
+                                "y": float(round((mask_abs_y1 / img_height) * 100, 2)),
+                                "width": float(round(((mask_abs_x2 - mask_abs_x1) / img_width) * 100, 2)),
+                                "height": float(round(((mask_abs_y2 - mask_abs_y1) / img_height) * 100, 2))
+                            }
+                            
+                            logger.info(f"Mask info (absolute positioning): {mask_info}")
+                            
+                        except (AttributeError, IndexError) as e:
+                            logger.warning(f"Could not get mask polygon from masks.xy, using detection bbox: {e}")
+                            # Fallback to detection bounding box in absolute coordinates
+                            mask_info = {
+                                "data": mask_data,
+                                "x": float(round((x1 / img_width) * 100, 2)),
+                                "y": float(round((y1 / img_height) * 100, 2)),
+                                "width": float(round(((x2 - x1) / img_width) * 100, 2)),
+                                "height": float(round(((y2 - y1) / img_height) * 100, 2))
+                            }
+                            
+
+                        # Downsample mask for efficiency (max 64x64)
+                        h, w = mask_tensor.shape
+                        max_size = 64
+                        if h > max_size or w > max_size:
+                            # Calculate downsample factor
+                            scale = min(max_size / h, max_size / w)
+                            new_h, new_w = int(h * scale), int(w * scale)
+                            
+                            # Use numpy for efficient downsampling
+                            import cv2
+                            mask_resized = cv2.resize(mask_tensor.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+                            mask_data = mask_resized.astype(int).tolist()
+                            logger.info(f"Mask downsampled from {h}x{w} to {new_h}x{new_w}")
+                            
+                            # IMPORTANT: DO NOT scale the coordinates
+                            # The mask coordinates should remain in the original bounding box space
+                            # Only the mask data is downsampled, not the position
+                            logger.info(f"Mask coordinates kept in original space: x1={mask_x1}, y1={mask_y1}, x2={mask_x2}, y2={mask_y2}")
+                        else:
+                            # Convert to list for JSON serialization if already small
+                            mask_data = mask_tensor.astype(int).tolist()
+                            logger.info(f"Mask used as-is: {h}x{w}")
+                        
+                        # Include mask position data for proper alignment
+                        # mask_x1, mask_y1, mask_x2, mask_y2 are already relative to the bounding box
+                        # We need to scale them to percentages of the bounding box's width and height
+                        bbox_width = x2 - x1
+                        bbox_height = y2 - y1
+                        
+                        mask_info = {
+                            "data": mask_data,
+                            "x": float(round((mask_x1 / bbox_width) * 100, 2)),
+                            "y": float(round((mask_y1 / bbox_height) * 100, 2)),
+                            "width": float(round(((mask_x2 - mask_x1) / bbox_width) * 100, 2)),
+                            "height": float(round(((mask_y2 - mask_y1) / bbox_height) * 100, 2))
+                        }
+                        
+                        logger.info(f"Mask info: {mask_info}")
+                    elif is_segmentation:
+                        logger.warning(f"Expected mask but not available for box {i}")
 
                     # Convert to percentage coordinates (0-100)
                     img_height, img_width = image_np.shape[:2]
@@ -284,15 +449,21 @@ async def detect_objects(file: UploadFile = File(...)):
                             "y2": float(round((y2 / img_height) * 100, 2))
                         }
                     }
+                    
+                    # Add mask data if using segmentation model
+                    if is_segmentation and 'mask_info' in locals():
+                        detection["mask"] = mask_info
+                    
                     detections.append(detection)
 
         response = {
-            "type": "detection",
+            "type": "segmentation" if is_segmentation else "detection",
+            "model": current_model_config['name'],
             "data": detections,
             "total_objects": len(detections)
         }
 
-        logger.info(f"Detection completed: {len(detections)} objects found")
+        logger.info(f"{current_model_config['name']} completed: {len(detections)} objects found")
         return response
 
     except Exception as e:
@@ -302,13 +473,15 @@ async def detect_objects(file: UploadFile = File(...)):
 @app.post("/api/detect-base64")
 async def detect_objects_base64(request: Dict[str, Any]):
     """
-    Detect objects in base64 encoded image using YOLO11
+    Detect objects in base64 encoded image using current YOLO model
+    Supports both detection (yolo26x.pt) and segmentation (yolo26x-seg.pt)
 
     Expects:
     - JSON with 'image' field containing base64 encoded image data
 
     Returns:
-    - JSON with detected objects, bounding boxes, confidence scores, and class names
+    - JSON with detected objects, bounding boxes, confidence scores, class names
+    - Includes segmentation masks if using segmentation model
     """
     global yolo_model
 
@@ -341,19 +514,27 @@ async def detect_objects_base64(request: Dict[str, Any]):
         # Convert PIL to numpy array for YOLO
         image_np = np.array(image)
 
-        # Run YOLO detection - restricted to people only (class 0)
+        # Run YOLO detection/segmentation - restricted to people only (class 0)
         results = yolo_model(image_np, classes=[0])
 
-        # Process results fast - only YOLO
-        detections = await process_detections(image, results, deep_analysis=False)
+        # Process results fast - handle both detection and segmentation
+        detections = await process_detections(image, results, deep_analysis=True)
+
+        # Debug: Log if we have masks in the detections
+        has_masks = any(det.get("mask") is not None for det in detections)
+        logger.info(f"Detections processed: {len(detections)} objects, has_masks: {has_masks}")
+        if has_masks:
+            mask_count = sum(1 for det in detections if det.get("mask") is not None)
+            logger.info(f"Objects with masks: {mask_count}")
 
         response = {
-            "type": "detection",
+            "type": "segmentation" if current_model_type == "segmentation" else "detection",
+            "model": current_model_config['name'],
             "data": detections,
             "total_objects": len(detections)
         }
 
-        logger.info(f"Base64 YOLO detection completed: {len(detections)} objects found")
+        logger.info(f"Base64 {current_model_config['name']} completed: {len(detections)} objects found")
         return response
 
     except Exception as e:
@@ -363,13 +544,15 @@ async def detect_objects_base64(request: Dict[str, Any]):
 @app.post("/api/detect-url")
 async def detect_objects_url(request: Dict[str, Any]):
     """
-    Detect objects in image from URL using YOLO11
+    Detect objects in image from URL using current YOLO model
+    Supports both detection (yolo26x.pt) and segmentation (yolo26x-seg.pt)
 
     Expects:
     - JSON with 'url' field containing image URL
 
     Returns:
-    - JSON with detected objects, bounding boxes, confidence scores, and class names
+    - JSON with detected objects, bounding boxes, confidence scores, class names
+    - Includes segmentation masks if using segmentation model
     """
     global yolo_model
 
@@ -392,19 +575,20 @@ async def detect_objects_url(request: Dict[str, Any]):
         # Convert PIL to numpy array for YOLO
         image_np = np.array(image)
 
-        # Run YOLO detection - restricted to people only (class 0)
+        # Run YOLO detection/segmentation - restricted to people only (class 0)
         results = yolo_model(image_np, classes=[0])
 
-        # Process results fast - only YOLO
-        detections = await process_detections(image, results, deep_analysis=False)
+        # Process results fast - handle both detection and segmentation
+        detections = await process_detections(image, results, deep_analysis=True)
 
         response = {
-            "type": "detection",
+            "type": "segmentation" if current_model_type == "segmentation" else "detection",
+            "model": current_model_config['name'],
             "data": detections,
             "total_objects": len(detections)
         }
 
-        logger.info(f"URL YOLO detection completed: {len(detections)} objects found")
+        logger.info(f"URL {current_model_config['name']} completed: {len(detections)} objects found")
         return response
 
     except requests.exceptions.RequestException as e:
@@ -656,91 +840,192 @@ async def get_image(image_name: str):
 
 @app.get("/api/models")
 def get_available_models():
-    """Get information about available YOLO11 models"""
-    models = {
-        "yolo11n": "YOLO11 Nano (fastest, least accurate)",
-        "yolo11s": "YOLO11 Small (balanced)",
-        "yolo11m": "YOLO11 Medium (more accurate)",
-        "yolo11l": "YOLO11 Large (very accurate)",
-        "yolo11x": "YOLO11 Extra Large (most accurate)"
-    }
-
+    """Get information about available YOLO models"""
     return {
-        "available_models": models,
-        "current_model": "yolo11x",
+        "available_models": AVAILABLE_MODELS,
+        "current_model": current_model_type,
+        "current_config": current_model_config,
         "vlm_model": "Florence-2-large",
         "reasoning_model": "Samsung-TRM",
-        "note": "Restart server to change model"
+        "note": "Use /api/models/switch to change models dynamically"
     }
 
 async def process_detections(image, results, deep_analysis=False):
     """Helper to process YOLO results and optionally run Florence-2 analysis"""
+    logger.info(f"process_detections called with deep_analysis={deep_analysis}")
     detections = []
     img_height, img_width = np.array(image).shape[:2]
+    is_segmentation = current_model_type == "segmentation"
+    
+    logger.info(f"Processing detections: is_segmentation={is_segmentation}, results_count={len(results)}")
     
     for result in results:
         boxes = result.boxes
+        masks = result.masks if is_segmentation else None
+        
+        logger.info(f"Result: boxes={boxes is not None}, masks={masks is not None}")
         if boxes is not None:
-            for box in boxes:
-                confidence = float(box.conf[0].cpu().numpy())
-                class_id = int(box.cls[0].cpu().numpy())
-                class_name = yolo_model.names[class_id]
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            logger.info(f"Number of boxes: {len(boxes)}")
+            if masks is not None:
+                logger.info(f"Number of masks: {len(masks.data)}")
+        
+        try:
+            if boxes is not None:
+                for i, box in enumerate(boxes):
+                    confidence = float(box.conf[0].cpu().numpy())
+                    class_id = int(box.cls[0].cpu().numpy())
+                    class_name = yolo_model.names[class_id]
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
 
-                # Get config for this class
-                config = OBJECT_CONFIG.get(class_name, {})
-                color = config.get("color", "#00FF00")
-                is_analyzable = config.get("is_analyzable", False)
-
-                analysis_text = ""
-                # Only attempt analysis if confidence is high (e.g., > 85%) as requested
-                if deep_analysis and is_analyzable and confidence > 0.85:
-                    try:
-                        pad = 40
-                        cx1 = max(0, int(x1) - pad)
-                        cy1 = max(0, int(y1) - pad)
-                        cx2 = min(img_width, int(x2) + pad)
-                        cy2 = min(img_height, int(y2) + pad)
-                        person_image = image.crop((cx1, cy1, cx2, cy2))
+                    # Get segmentation mask if available
+                    mask_data = None
+                    if is_segmentation and masks is not None and i < len(masks.data):
+                        logger.info(f"Processing mask for box {i}")
+                        # Convert mask to binary format for frontend
+                        mask_tensor = masks.data[i].cpu().numpy()
+                        logger.info(f"Mask tensor shape: {mask_tensor.shape}")
                         
-                        # Validate crop
-                        if person_image.width < 5 or person_image.height < 5:
-                            logger.warning(f"Crop too small: {person_image.size}")
-                            analysis_text = "Crop too small"
+                        # Get mask position and scale information
+                        try:
+                            mask_polygon = masks.xy[i][0].cpu().numpy()
+                            mask_x1 = np.min(mask_polygon[:, 0])
+                            mask_y1 = np.min(mask_polygon[:, 1])
+                            mask_x2 = np.max(mask_polygon[:, 0])
+                            mask_y2 = np.max(mask_polygon[:, 1])
+                            
+                            logger.info(f"Calculated mask bbox from polygon: x1={mask_x1}, y1={mask_y1}, x2={mask_x2}, y2={mask_y2}")
+                            logger.info(f"Bounding box: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+                            
+                            # Calculate relative position within bounding box
+                            rel_x1 = mask_x1 - x1
+                            rel_y1 = mask_y1 - y1
+                            rel_x2 = mask_x2 - x1
+                            rel_y2 = mask_y2 - y1
+                            
+                            logger.info(f"Relative mask bbox: x1={rel_x1}, y1={rel_y1}, x2={rel_x2}, y2={rel_y2}")
+                            
+                            # Check if mask coordinates are valid
+                            if rel_x1 < 0 or rel_y1 < 0 or rel_x2 > (x2 - x1) or rel_y2 > (y2 - y1):
+                                logger.warning(f"Mask coordinates extend beyond bounding box, using full bounding box")
+                                # Fallback to full bounding box
+                                rel_x1, rel_y1, rel_x2, rel_y2 = 0, 0, (x2 - x1), (y2 - y1)
+                            
+                            # Use relative coordinates
+                            mask_x1, mask_y1, mask_x2, mask_y2 = rel_x1, rel_y1, rel_x2, rel_y2
+                            
+                        except (AttributeError, IndexError) as e:
+                            logger.warning(f"Could not get mask polygon from masks.xy, using full bounding box: {e}")
+                            # Fallback to full bounding box
+                            mask_x1, mask_y1, mask_x2, mask_y2 = 0, 0, (x2 - x1), (y2 - y1)
+                        
+                        # Downsample mask for efficiency (max 64x64)
+                        h, w = mask_tensor.shape
+                        max_size = 64
+                        if h > max_size or w > max_size:
+                            # Calculate downsample factor
+                            scale = min(max_size / h, max_size / w)
+                            new_h, new_w = int(h * scale), int(w * scale)
+                            
+                            # Use cv2 for efficient downsampling
+                            import cv2
+                            mask_resized = cv2.resize(mask_tensor.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+                            mask_data = mask_resized.astype(int).tolist()
+                            logger.info(f"Mask downsampled from {h}x{w} to {new_h}x{new_w}")
+                            
+                            # IMPORTANT: DO NOT scale the coordinates
+                            # The mask coordinates should remain in the original bounding box space
+                            # Only the mask data is downsampled, not the position
+                            logger.info(f"Mask coordinates kept in original space: x1={mask_x1}, y1={mask_y1}, x2={mask_x2}, y2={mask_y2}")
                         else:
-                            # Using just the task token to avoid 'only one token' error
-                            florence_results = await run_florence_analysis(person_image, "<DETAILED_CAPTION>")
-                            
-                            if "<DETAILED_CAPTION>" in florence_results:
-                                analysis_text = florence_results["<DETAILED_CAPTION>"]
-                            elif "<CAPTION>" in florence_results:
-                                analysis_text = florence_results["<CAPTION>"]
-                            else:
-                                analysis_text = next(iter(florence_results.values())) if florence_results else "No caption"
-                            
-                        logger.info(f"Florence analysis: {analysis_text}")
-                    except Exception as e:
-                        logger.error(f"Florence analysis failed: {str(e)}")
-                        analysis_text = f"Analysis error: {str(e)[:50]}"
+                            # Convert to list for JSON serialization if already small
+                            mask_data = mask_tensor.astype(int).tolist()
+                            logger.info(f"Mask used as-is: {h}x{w}")
+                        
+                        # Include mask position data for proper alignment
+                        # mask_x1, mask_y1, mask_x2, mask_y2 are already relative to the bounding box
+                        # We need to scale them to percentages of the bounding box's width and height
+                        bbox_width = x2 - x1
+                        bbox_height = y2 - y1
+                        
+                        mask_info = {
+                            "data": mask_data,
+                            "x": float(round((mask_x1 / bbox_width) * 100, 2)),
+                            "y": float(round((mask_y1 / bbox_height) * 100, 2)),
+                            "width": float(round(((mask_x2 - mask_x1) / bbox_width) * 100, 2)),
+                            "height": float(round(((mask_y2 - mask_y1) / bbox_height) * 100, 2))
+                        }
+                        
+                        logger.info(f"Mask info: {mask_info}")
+                    elif is_segmentation:
+                        logger.warning(f"Expected mask but not available for box {i} (masks: {masks is not None}, i: {i}, len(masks.data): {len(masks.data) if masks else 'N/A'})")
 
-                detections.append({
-                    "class": class_name,
-                    "confidence": float(round(confidence, 3)),
-                    "analysis": analysis_text,
-                    "color": color, 
-                    "is_analyzable": is_analyzable,
-                    "category": config.get("category", "Misc"),
-                    "bbox": {
-                        "x1": float(round((x1 / img_width) * 100, 2)),
-                        "y1": float(round((y1 / img_height) * 100, 2)),
-                        "x2": float(round((x2 / img_width) * 100, 2)),
-                        "y2": float(round((y2 / img_height) * 100, 2))
+                    # Get config for this class
+                    config = OBJECT_CONFIG.get(class_name, {})
+                    color = config.get("color", "#00FF00")
+                    is_analyzable = config.get("is_analyzable", False)
+
+                    analysis_text = ""
+                    logger.info(f"Analysis check: deep_analysis={deep_analysis}, is_analyzable={is_analyzable}, confidence={confidence}")
+                    if deep_analysis and is_analyzable and confidence > 0.75:
+                        logger.info(f"Starting Florence2 analysis for {class_name} with confidence {confidence}")
+                        try:
+                            pad = 40
+                            cx1 = max(0, int(x1) - pad)
+                            cy1 = max(0, int(y1) - pad)
+                            cx2 = min(img_width, int(x2) + pad)
+                            cy2 = min(img_height, int(y2) + pad)
+                            person_image = image.crop((cx1, cy1, cx2, cy2))
+                            
+                            # Validate crop
+                            if person_image.width < 5 or person_image.height < 5:
+                                logger.warning(f"Crop too small: {person_image.size}")
+                                analysis_text = "Crop too small"
+                            else:
+                                # Using just the task token to avoid 'only one token' error
+                                florence_results = await run_florence_analysis(person_image, "<DETAILED_CAPTION>")
+                                
+                                if "<DETAILED_CAPTION>" in florence_results:
+                                    analysis_text = florence_results["<DETAILED_CAPTION>"]
+                                elif "<CAPTION>" in florence_results:
+                                    analysis_text = florence_results["<CAPTION>"]
+                                else:
+                                    analysis_text = next(iter(florence_results.values())) if florence_results else "No caption"
+                                
+                            logger.info(f"Florence analysis: {analysis_text}")
+                        except Exception as e:
+                            logger.error(f"Florence analysis failed: {str(e)}")
+                            analysis_text = f"Analysis error: {str(e)[:50]}"
+
+                    detection_data = {
+                        "class": class_name,
+                        "confidence": float(round(confidence, 3)),
+                        "analysis": analysis_text,
+                        "color": color, 
+                        "is_analyzable": is_analyzable,
+                        "category": config.get("category", "Misc"),
+                        "bbox": {
+                            "x1": float(round((x1 / img_width) * 100, 2)),
+                            "y1": float(round((y1 / img_height) * 100, 2)),
+                            "x2": float(round((x2 / img_width) * 100, 2)),
+                            "y2": float(round((y2 / img_height) * 100, 2))
+                        }
                     }
-                })
+                    
+                    # Add mask data if using segmentation model
+                    if is_segmentation and 'mask_info' in locals():
+                        detection_data["mask"] = mask_info
+                    
+                    detections.append(detection_data)
+                    logger.info(f"Completed processing detection {i}: {class_name}")
+        
+        except Exception as e:
+            logger.error(f"Error processing detection result: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     response_data = []
     for det in detections:
-        response_data.append({
+        response_item = {
             "x": float(det["bbox"]["x1"]),
             "y": float(det["bbox"]["y1"]),
             "width": float(det["bbox"]["x2"] - det["bbox"]["x1"]),
@@ -751,7 +1036,13 @@ async def process_detections(image, results, deep_analysis=False):
             "confidence": float(det["confidence"]),
             "is_analyzable": det.get("is_analyzable", False),
             "category": det.get("category", "Misc")
-        })
+        }
+        
+        # Add mask data if using segmentation model
+        if is_segmentation and "mask" in det:
+            response_item["mask"] = det["mask"]
+        
+        response_data.append(response_item)
     
     # NEW: Fallback for when YOLO fails to find any objects
     if not response_data:

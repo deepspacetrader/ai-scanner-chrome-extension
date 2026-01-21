@@ -3,5 +3,6 @@
         "Qwen",
         "Zynth",
         "zzfx"
-    ]
+    ],
+    "python.languageServer": "None"
 }

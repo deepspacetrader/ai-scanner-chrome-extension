@@ -1,6 +1,7 @@
 export interface Settings {
     triggerInput: string;
     detectionEndpoint: string;
+    detectionModel: string; // New field for model selection
     enableSummarization: boolean;
     summarizationEndpoint: string;
     summarizationModel: string;
@@ -19,6 +20,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
     triggerInput: "keyboard:Alt",
     detectionEndpoint: "http://localhost:8001/api/detect-base64",
+    detectionModel: "segmentation", // Default to segmentation model
     enableSummarization: true,
     summarizationEndpoint: "http://localhost:8001/api/summarize",
     summarizationModel: "zai-org/glm-4.6v-flash",
