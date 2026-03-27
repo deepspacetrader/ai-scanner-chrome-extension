@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { textSummarizer, type SummaryResult, type SummarySettings } from '../services/textSummarizer'
+import { textSummarizer, type SummaryResult, type SummarySettings, type StreamingSummaryResult } from '../services/textSummarizer'
 
 export interface TextSelection {
     text: string
@@ -11,6 +11,7 @@ export interface TextSelection {
 export function useTextSummarization(isActive: boolean, settings: SummarySettings) {
     const [selection, setSelection] = useState<TextSelection | null>(null)
     const [summaryResult, setSummaryResult] = useState<SummaryResult | null>(null)
+    const [streamingText, setStreamingText] = useState<string>('')
     const [isSummarizing, setIsSummarizing] = useState(false)
     const [error, setError] = useState<string>('')
     const currentKeyRef = useRef<string>('')
@@ -94,11 +95,26 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
 
         setIsSummarizing(true)
         setError('')
+        setStreamingText('')
 
-        textSummarizer.summarize(truncated, settings)
+        // Use streaming if enabled, otherwise fall back to regular summarization
+        if (settings.stream) {
+            textSummarizer.streamSummarize(truncated, settings, (chunk: StreamingSummaryResult) => {
+                if (currentKeyRef.current === key) {
+                    setStreamingText(chunk.text)
+                    if (chunk.finished) {
+                        setStreamingText('')
+                        setSummaryResult({
+                            summary: chunk.text,
+                            model: chunk.model
+                        })
+                    }
+                }
+            })
             .then((result) => {
                 if (currentKeyRef.current === key) {
                     setSummaryResult(result)
+                    setStreamingText('')
                     setError('')
                 }
             })
@@ -106,6 +122,7 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
                 if (currentKeyRef.current === key) {
                     setError(err?.message || 'Summarization failed')
                     setSummaryResult(null)
+                    setStreamingText('')
                 }
             })
             .finally(() => {
@@ -113,6 +130,28 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
                     setIsSummarizing(false)
                 }
             })
+        } else {
+            textSummarizer.summarize(truncated, settings)
+                .then((result) => {
+                    if (currentKeyRef.current === key) {
+                        setSummaryResult(result)
+                        setError('')
+                        setStreamingText('')
+                    }
+                })
+                .catch((err) => {
+                    if (currentKeyRef.current === key) {
+                        setError(err?.message || 'Summarization failed')
+                        setSummaryResult(null)
+                        setStreamingText('')
+                    }
+                })
+                .finally(() => {
+                    if (currentKeyRef.current === key) {
+                        setIsSummarizing(false)
+                    }
+                })
+        }
     }, [isActive, settings, buildPreview, computeSelectionRect])
 
     /**
@@ -157,11 +196,48 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
             setSelection(selectionData)
             setIsSummarizing(true)
             setError('')
+            setStreamingText('')
 
-            const result = await textSummarizer.summarize(truncated, settings)
-            if (currentKeyRef.current === key) {
-                setSummaryResult(result)
-                setError('')
+            // Use streaming if enabled, otherwise fall back to regular summarization
+            if (settings.stream) {
+                textSummarizer.streamSummarize(truncated, settings, (chunk: StreamingSummaryResult) => {
+                    if (currentKeyRef.current === key) {
+                        setStreamingText(chunk.text)
+                        if (chunk.finished) {
+                            setStreamingText('')
+                            setSummaryResult({
+                                summary: chunk.text,
+                                model: chunk.model
+                            })
+                        }
+                    }
+                })
+                .then((result) => {
+                    if (currentKeyRef.current === key) {
+                        setSummaryResult(result)
+                        setStreamingText('')
+                        setError('')
+                    }
+                })
+                .catch((err) => {
+                    if (currentKeyRef.current) {
+                        setError(err?.message || 'Failed to scan page text')
+                        setSummaryResult(null)
+                        setStreamingText('')
+                    }
+                })
+                .finally(() => {
+                    if (currentKeyRef.current) {
+                        setIsSummarizing(false)
+                    }
+                })
+            } else {
+                const result = await textSummarizer.summarize(truncated, settings)
+                if (currentKeyRef.current === key) {
+                    setSummaryResult(result)
+                    setError('')
+                    setStreamingText('')
+                }
             }
         } catch (err: any) {
             if (currentKeyRef.current) {
@@ -181,6 +257,7 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
     const clearSummary = useCallback(() => {
         setSelection(null)
         setSummaryResult(null)
+        setStreamingText('')
         setError('')
         setIsSummarizing(false)
         currentKeyRef.current = ''
@@ -218,6 +295,7 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
     return {
         selection,
         summaryResult,
+        streamingText,
         isSummarizing,
         error,
         scanFullPage,

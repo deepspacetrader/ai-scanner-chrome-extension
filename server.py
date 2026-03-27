@@ -19,12 +19,20 @@ import torch
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi import Request
 from ultralytics import YOLO
 from transformers import AutoProcessor, AutoModelForCausalLM, AutoTokenizer, Qwen2VLForConditionalGeneration
 import uvicorn
+import json
+import asyncio
+import sys
+import time
 from object_config import OBJECT_CONFIG
+
+# Idle shutdown: exit after this many minutes with no API requests (frees GPU/RAM for other models)
+IDLE_SHUTDOWN_MINUTES = 20
+_last_activity: float | None = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -114,6 +122,22 @@ async def lifespan(app: FastAPI):
             device_map="auto"
         ).eval()
         logger.info("Qwen2-VL loaded successfully")
+
+        # Start idle shutdown task: exit after IDLE_SHUTDOWN_MINUTES with no requests (frees GPU/RAM)
+        global _last_activity
+        _last_activity = time.time()
+
+        async def idle_shutdown_loop():
+            while True:
+                await asyncio.sleep(60)  # check every minute
+                if _last_activity is None:
+                    continue
+                idle_sec = time.time() - _last_activity
+                if idle_sec >= IDLE_SHUTDOWN_MINUTES * 60:
+                    logger.info("Idle for %s min — shutting down to free memory. Run launcher and scan again to restart.", IDLE_SHUTDOWN_MINUTES)
+                    sys.exit(0)
+
+        asyncio.create_task(idle_shutdown_loop())
         
         yield
     except Exception as e:
@@ -133,6 +157,13 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Track last request time for idle shutdown (so we can free GPU/RAM when not in use)
+@app.middleware("http")
+async def track_activity(request: Request, call_next):
+    global _last_activity
+    _last_activity = time.time()
+    return await call_next(request)
 
 # Add CORS middleware to allow requests from browser
 app.add_middleware(
@@ -323,8 +354,8 @@ async def detect_objects(file: UploadFile = File(...)):
         # Convert PIL to numpy array for YOLO
         image_np = np.array(image)
 
-        # Run YOLO detection/segmentation - restricted to people only (class 0)
-        results = yolo_model(image_np, classes=[0])
+        # Run YOLO detection/segmentation - detect ALL classes
+        results = yolo_model(image_np)
 
         # Process results based on current model type
         is_segmentation = current_model_type == "segmentation"
@@ -349,93 +380,9 @@ async def detect_objects(file: UploadFile = File(...)):
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
 
                     # Get segmentation mask if available
-                    mask_data = None
-                    if is_segmentation and masks is not None and i < len(masks.data):
-                        # Convert mask to binary format for frontend
-                        mask_tensor = masks.data[i].cpu().numpy()
-                        logger.info(f"Mask tensor shape: {mask_tensor.shape}")
-                        
-                        # Get mask position and scale information
-                        # YOLO masks.xy contains polygon coordinates, not bounding box
-                        # We need to calculate the bounding box from the polygon points
-                        try:
-                            mask_polygon = masks.xy[i][0].cpu().numpy()
-                            logger.info(f"Raw mask polygon shape: {mask_polygon.shape}")
-                            logger.info(f"First few polygon points: {mask_polygon[:5]}")
-                            
-                            # Calculate mask bounding box in absolute image coordinates
-                            mask_abs_x1 = np.min(mask_polygon[:, 0])
-                            mask_abs_y1 = np.min(mask_polygon[:, 1])
-                            mask_abs_x2 = np.max(mask_polygon[:, 0])
-                            mask_abs_y2 = np.max(mask_polygon[:, 1])
-                            
-                            logger.info(f"Calculated mask bbox in absolute coords: x1={mask_abs_x1}, y1={mask_abs_y1}, x2={mask_abs_x2}, y2={mask_abs_y2}")
-                            logger.info(f"Detection bbox: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
-                            logger.info(f"Image dimensions: width={img_width}, height={img_height}")
-                            
-                            # Convert mask coordinates to percentages of the full image
-                            mask_info = {
-                                "data": mask_data,
-                                "x": float(round((mask_abs_x1 / img_width) * 100, 2)),
-                                "y": float(round((mask_abs_y1 / img_height) * 100, 2)),
-                                "width": float(round(((mask_abs_x2 - mask_abs_x1) / img_width) * 100, 2)),
-                                "height": float(round(((mask_abs_y2 - mask_abs_y1) / img_height) * 100, 2))
-                            }
-                            
-                            logger.info(f"Mask info (absolute positioning): {mask_info}")
-                            
-                        except (AttributeError, IndexError) as e:
-                            logger.warning(f"Could not get mask polygon from masks.xy, using detection bbox: {e}")
-                            # Fallback to detection bounding box in absolute coordinates
-                            mask_info = {
-                                "data": mask_data,
-                                "x": float(round((x1 / img_width) * 100, 2)),
-                                "y": float(round((y1 / img_height) * 100, 2)),
-                                "width": float(round(((x2 - x1) / img_width) * 100, 2)),
-                                "height": float(round(((y2 - y1) / img_height) * 100, 2))
-                            }
-                            
-
-                        # Downsample mask for efficiency (max 64x64)
-                        h, w = mask_tensor.shape
-                        max_size = 64
-                        if h > max_size or w > max_size:
-                            # Calculate downsample factor
-                            scale = min(max_size / h, max_size / w)
-                            new_h, new_w = int(h * scale), int(w * scale)
-                            
-                            # Use numpy for efficient downsampling
-                            import cv2
-                            mask_resized = cv2.resize(mask_tensor.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-                            mask_data = mask_resized.astype(int).tolist()
-                            logger.info(f"Mask downsampled from {h}x{w} to {new_h}x{new_w}")
-                            
-                            # IMPORTANT: DO NOT scale the coordinates
-                            # The mask coordinates should remain in the original bounding box space
-                            # Only the mask data is downsampled, not the position
-                            logger.info(f"Mask coordinates kept in original space: x1={mask_x1}, y1={mask_y1}, x2={mask_x2}, y2={mask_y2}")
-                        else:
-                            # Convert to list for JSON serialization if already small
-                            mask_data = mask_tensor.astype(int).tolist()
-                            logger.info(f"Mask used as-is: {h}x{w}")
-                        
-                        # Include mask position data for proper alignment
-                        # mask_x1, mask_y1, mask_x2, mask_y2 are already relative to the bounding box
-                        # We need to scale them to percentages of the bounding box's width and height
-                        bbox_width = x2 - x1
-                        bbox_height = y2 - y1
-                        
-                        mask_info = {
-                            "data": mask_data,
-                            "x": float(round((mask_x1 / bbox_width) * 100, 2)),
-                            "y": float(round((mask_y1 / bbox_height) * 100, 2)),
-                            "width": float(round(((mask_x2 - mask_x1) / bbox_width) * 100, 2)),
-                            "height": float(round(((mask_y2 - mask_y1) / bbox_height) * 100, 2))
-                        }
-                        
-                        logger.info(f"Mask info: {mask_info}")
-                    elif is_segmentation:
-                        logger.warning(f"Expected mask but not available for box {i}")
+                    mask_info = None
+                    if is_segmentation:
+                        mask_info = process_mask_data(masks, i, x1, y1, x2, y2, img_width, img_height)
 
                     # Convert to percentage coordinates (0-100)
                     img_height, img_width = image_np.shape[:2]
@@ -514,11 +461,14 @@ async def detect_objects_base64(request: Dict[str, Any]):
         # Convert PIL to numpy array for YOLO
         image_np = np.array(image)
 
-        # Run YOLO detection/segmentation - restricted to people only (class 0)
-        results = yolo_model(image_np, classes=[0])
+        # Run YOLO detection/segmentation - detect ALL classes
+        results = yolo_model(image_np)
 
+        # Get vision model from request
+        vision_model = request.get("vision_model", "florence2")
+        
         # Process results fast - handle both detection and segmentation
-        detections = await process_detections(image, results, deep_analysis=True)
+        detections = await process_detections(image, results, deep_analysis=True, vision_model=vision_model)
 
         # Debug: Log if we have masks in the detections
         has_masks = any(det.get("mask") is not None for det in detections)
@@ -575,11 +525,14 @@ async def detect_objects_url(request: Dict[str, Any]):
         # Convert PIL to numpy array for YOLO
         image_np = np.array(image)
 
-        # Run YOLO detection/segmentation - restricted to people only (class 0)
-        results = yolo_model(image_np, classes=[0])
+        # Run YOLO detection/segmentation - detect ALL classes
+        results = yolo_model(image_np)
 
+        # Get vision model from request
+        vision_model = request.get("vision_model", "florence2")
+        
         # Process results fast - handle both detection and segmentation
-        detections = await process_detections(image, results, deep_analysis=True)
+        detections = await process_detections(image, results, deep_analysis=True, vision_model=vision_model)
 
         response = {
             "type": "segmentation" if current_model_type == "segmentation" else "detection",
@@ -686,7 +639,7 @@ async def analyze_box(request: Dict[str, Any]):
 @app.post("/api/summarize")
 async def summarize_text(request: Dict[str, Any]):
     """
-    Summarize text using
+    Summarize text using streaming support
     """
     global summarizer_model, summarizer_tokenizer, current_summarize_id
     
@@ -698,6 +651,9 @@ async def summarize_text(request: Dict[str, Any]):
         if not text:
             raise HTTPException(status_code=400, detail="No text provided")
 
+        # Check if streaming is requested
+        stream = request.get("stream", False)
+        
         # Increment request ID to signal old requests to stop
         current_id = current_summarize_id + 1
         current_summarize_id = current_id
@@ -706,6 +662,7 @@ async def summarize_text(request: Dict[str, Any]):
         mode = request.get("mode", "summarize") # 'summarize' or 'refine'
         category = request.get("category", "Misc")
         obj_type = request.get("type")
+        very_simple_summary = request.get("verySimpleSummary", False)
         
         # Base system prompt for Text Summarization - Neutral and performance-oriented
         system_prompt = request.get("system_prompt") or (
@@ -738,6 +695,21 @@ async def summarize_text(request: Dict[str, Any]):
                 "TASK: Perform high-certainty identification. Output ONLY the identification data. "
                 "Maximum 20 words."
             )
+        elif very_simple_summary:
+            # Very simple summary mode - ultra-condensed
+            query = (
+                "TASK: Create an extremely simple summary. Use simple words and short sentences. (can be grammatically incorrect just to save tokens)"
+                "Maximum 50 words total. Focus on the main action or key point only.\n"
+                "EXAMPLES:\n"
+                "Input: 'Indonesia has conditionally lifted its ban on xAI's Grok chatbot following similar moves by Malaysia and the Philippines.'\n"
+                "Output: 'Indonesia unbans Grok.'\n\n"
+                "Input: 'India simultaneously announced sweeping tax incentives through 2047 to attract global AI workloads.'\n"
+                "Output: 'India lowers tax for AI.'\n\n"
+                "Input: 'Elon Musk's reported consolidation of Tesla, SpaceX, and xAI marks a return to large-scale corporate conglomerates.'\n"
+                "Output: 'Elon to merge companies.'\n\n"
+                "Now summarize this text: \n\n"
+                f"TEXT: {text}\n\n"
+            )
         else:
             # Standard website text summarization
             query = (
@@ -767,22 +739,98 @@ async def summarize_text(request: Dict[str, Any]):
                 # If a new request has started, stop this one
                 return current_summarize_id != self.target_id
 
-        with torch.no_grad():
-            output_ids = summarizer_model.generate(
-                **inputs,
-                max_new_tokens=1024,
-                do_sample=False,  # Greedy search for maximum speed
-                num_beams=1,
-                stopping_criteria=StoppingCriteriaList([CancelCriteria(current_id)])
-            )
-        
-        # Check if we were cancelled
-        if current_summarize_id != current_id:
-            logger.info(f"Summarization request {current_id} cancelled")
-            return {"summary": "[Request cancelled by a newer one]", "cancelled": True}
+        if stream:
+            # Streaming response
+            async def stream_generator():
+                try:
+                    with torch.no_grad():
+                        logger.info(f"Starting streaming summarization for text length: {len(text)}")
+                        output_ids = summarizer_model.generate(
+                            **inputs,
+                            max_new_tokens=512,  # Reduced from 1024 for faster response
+                            do_sample=False,  # Greedy search for maximum speed
+                            num_beams=1,
+                            stopping_criteria=StoppingCriteriaList([CancelCriteria(current_id)]),
+                            pad_token_id=summarizer_tokenizer.eos_token_id,  # Prevent hanging
+                        )
+                    
+                    # Check if we were cancelled
+                    if current_summarize_id != current_id:
+                        logger.info(f"Summarization request {current_id} cancelled")
+                        yield f"data: {json.dumps({'cancelled': True, 'summary': '[Request cancelled by a newer one]'})}\n\n"
+                        return
+                    
+                    # For now, we'll simulate streaming by yielding chunks of the final result
+                    # In a real implementation, you'd use the model's streaming capabilities
+                    full_summary = summarizer_tokenizer.decode(output_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
+                    logger.info(f"Streaming summarization completed, summary length: {len(full_summary)}")
+                    
+                    # Simulate streaming by sending chunks
+                    words = full_summary.split()
+                    current_text = ""
+                    for i, word in enumerate(words):
+                        current_text += word + " "
+                        chunk_data = {
+                            'text': current_text.strip(),
+                            'finished': i == len(words) - 1,
+                            'model': 'Qwen2.5'
+                        }
+                        yield f"data: {json.dumps(chunk_data)}\n\n"
+                        # Small delay to simulate streaming effect
+                        await asyncio.sleep(0.05)
+                    
+                except torch.cuda.OutOfMemoryError as e:
+                    logger.error(f"CUDA out of memory during streaming: {e}")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    error_data = {'error': 'GPU memory exhausted, try shorter text'}
+                    yield f"data: {json.dumps(error_data)}\n\n"
+                except Exception as e:
+                    logger.error(f"Streaming generation failed: {e}")
+                    error_data = {'error': str(e)}
+                    yield f"data: {json.dumps(error_data)}\n\n"
             
-        summary = summarizer_tokenizer.decode(output_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-        return {"summary": summary.strip(), "model": "Qwen2.5"}
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/plain",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
+        else:
+            # Non-streaming response (original behavior)
+            try:
+                with torch.no_grad():
+                    logger.info(f"Starting summarization for text length: {len(text)}")
+                    output_ids = summarizer_model.generate(
+                        **inputs,
+                        max_new_tokens=512,  # Reduced from 1024 for faster response
+                        do_sample=False,  # Greedy search for maximum speed
+                        num_beams=1,
+                        stopping_criteria=StoppingCriteriaList([CancelCriteria(current_id)]),
+                        pad_token_id=summarizer_tokenizer.eos_token_id,  # Prevent hanging
+                    )
+                
+                # Check if we were cancelled
+                if current_summarize_id != current_id:
+                    logger.info(f"Summarization request {current_id} cancelled")
+                    return {"summary": "[Request cancelled by a newer one]", "cancelled": True}
+                    
+                summary = summarizer_tokenizer.decode(output_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+                logger.info(f"Summarization completed, summary length: {len(summary)}")
+                return {"summary": summary.strip(), "model": "Qwen2.5"}
+            except torch.cuda.OutOfMemoryError as e:
+                logger.error(f"CUDA out of memory during summarization: {e}")
+                # Clear CUDA cache and retry with shorter text
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                raise HTTPException(status_code=503, detail="GPU memory exhausted, try shorter text")
+            except Exception as e:
+                logger.error(f"Summarization generation failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Summarization failed: {str(e)}")
 
     except Exception as e:
         logger.error(f"Summarization failed: {e}")
@@ -850,7 +898,99 @@ def get_available_models():
         "note": "Use /api/models/switch to change models dynamically"
     }
 
-async def process_detections(image, results, deep_analysis=False):
+def process_mask_data(masks, i, x1, y1, x2, y2, img_width, img_height):
+    """Helper function to process mask data for both detection endpoints"""
+    mask_info = None
+    
+    try:
+        if masks is not None and i < len(masks.data):
+            mask_tensor = masks.data[i]
+            
+            # Get mask polygon and convert to absolute coordinates
+            if hasattr(masks, 'xy') and i < len(masks.xy):
+                mask_polygon = masks.xy[i].cpu().numpy()
+                
+                # Get bounding box of mask polygon
+                mask_x_coords = mask_polygon[:, 0]
+                mask_y_coords = mask_polygon[:, 1]
+                mask_x1, mask_y1 = mask_x_coords.min(), mask_y_coords.min()
+                mask_x2, mask_y2 = mask_x_coords.max(), mask_y_coords.max()
+                
+                # Convert to absolute coordinates in the full image
+                mask_abs_x1 = x1 + mask_x1
+                mask_abs_y1 = y1 + mask_y1
+                mask_abs_x2 = x1 + mask_x2
+                mask_abs_y2 = y1 + mask_y2
+                
+                # Constrain to image bounds
+                mask_abs_x1 = max(0, min(mask_abs_x1, img_width))
+                mask_abs_y1 = max(0, min(mask_abs_y1, img_height))
+                mask_abs_x2 = max(0, min(mask_abs_x2, img_width))
+                mask_abs_y2 = max(0, min(mask_abs_y2, img_height))
+                
+                # Downsample mask for efficiency (max 64x64)
+                h, w = mask_tensor.shape
+                max_size = 64
+                if h > max_size or w > max_size:
+                    # Calculate downsample factor
+                    scale = min(max_size / h, max_size / w)
+                    new_h, new_w = int(h * scale), int(w * scale)
+                    
+                    # Use cv2 for efficient downsampling
+                    import cv2
+                    mask_resized = cv2.resize(mask_tensor.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+                    mask_data = mask_resized.astype(int).tolist()
+                    logger.info(f"Mask downsampled from {h}x{w} to {new_h}x{new_w}")
+                else:
+                    # Convert to list for JSON serialization if already small
+                    mask_data = mask_tensor.astype(int).tolist()
+                
+                # Convert mask coordinates to percentages of the full image
+                mask_info = {
+                    "data": mask_data,
+                    "x": float(round((mask_abs_x1 / img_width) * 100, 2)),
+                    "y": float(round((mask_abs_y1 / img_height) * 100, 2)),
+                    "width": float(round(((mask_abs_x2 - mask_abs_x1) / img_width) * 100, 2)),
+                    "height": float(round(((mask_abs_y2 - mask_abs_y1) / img_height) * 100, 2))
+                }
+                
+            else:
+                # Fallback: use full bounding box in absolute coordinates
+                h, w = mask_tensor.shape
+                max_size = 64
+                if h > max_size or w > max_size:
+                    scale = min(max_size / h, max_size / w)
+                    new_h, new_w = int(h * scale), int(w * scale)
+                    import cv2
+                    mask_resized = cv2.resize(mask_tensor.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+                    mask_data = mask_resized.astype(int).tolist()
+                else:
+                    mask_data = mask_tensor.astype(int).tolist()
+                
+                mask_info = {
+                    "data": mask_data,
+                    "x": float(round((x1 / img_width) * 100, 2)),
+                    "y": float(round((y1 / img_height) * 100, 2)),
+                    "width": float(round(((x2 - x1) / img_width) * 100, 2)),
+                    "height": float(round(((y2 - y1) / img_height) * 100, 2))
+                }
+        else:
+            logger.warning(f"Expected mask but not available for box {i}")
+            
+    except (AttributeError, IndexError) as e:
+        logger.warning(f"Could not get mask polygon from masks.xy, using detection bbox: {e}")
+        # Fallback to detection bounding box in absolute coordinates
+        mask_info = {
+            "data": [],
+            "x": float(round((x1 / img_width) * 100, 2)),
+            "y": float(round((y1 / img_height) * 100, 2)),
+            "width": float(round(((x2 - x1) / img_width) * 100, 2)),
+            "height": float(round(((y2 - y1) / img_height) * 100, 2))
+        }
+    
+    return mask_info
+
+async def process_detections(image, results, deep_analysis=False, vision_model="florence2"):
     """Helper to process YOLO results and optionally run Florence-2 analysis"""
     logger.info(f"process_detections called with deep_analysis={deep_analysis}")
     detections = []
@@ -878,86 +1018,9 @@ async def process_detections(image, results, deep_analysis=False):
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
 
                     # Get segmentation mask if available
-                    mask_data = None
-                    if is_segmentation and masks is not None and i < len(masks.data):
-                        logger.info(f"Processing mask for box {i}")
-                        # Convert mask to binary format for frontend
-                        mask_tensor = masks.data[i].cpu().numpy()
-                        logger.info(f"Mask tensor shape: {mask_tensor.shape}")
-                        
-                        # Get mask position and scale information
-                        try:
-                            mask_polygon = masks.xy[i][0].cpu().numpy()
-                            mask_x1 = np.min(mask_polygon[:, 0])
-                            mask_y1 = np.min(mask_polygon[:, 1])
-                            mask_x2 = np.max(mask_polygon[:, 0])
-                            mask_y2 = np.max(mask_polygon[:, 1])
-                            
-                            logger.info(f"Calculated mask bbox from polygon: x1={mask_x1}, y1={mask_y1}, x2={mask_x2}, y2={mask_y2}")
-                            logger.info(f"Bounding box: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
-                            
-                            # Calculate relative position within bounding box
-                            rel_x1 = mask_x1 - x1
-                            rel_y1 = mask_y1 - y1
-                            rel_x2 = mask_x2 - x1
-                            rel_y2 = mask_y2 - y1
-                            
-                            logger.info(f"Relative mask bbox: x1={rel_x1}, y1={rel_y1}, x2={rel_x2}, y2={rel_y2}")
-                            
-                            # Check if mask coordinates are valid
-                            if rel_x1 < 0 or rel_y1 < 0 or rel_x2 > (x2 - x1) or rel_y2 > (y2 - y1):
-                                logger.warning(f"Mask coordinates extend beyond bounding box, using full bounding box")
-                                # Fallback to full bounding box
-                                rel_x1, rel_y1, rel_x2, rel_y2 = 0, 0, (x2 - x1), (y2 - y1)
-                            
-                            # Use relative coordinates
-                            mask_x1, mask_y1, mask_x2, mask_y2 = rel_x1, rel_y1, rel_x2, rel_y2
-                            
-                        except (AttributeError, IndexError) as e:
-                            logger.warning(f"Could not get mask polygon from masks.xy, using full bounding box: {e}")
-                            # Fallback to full bounding box
-                            mask_x1, mask_y1, mask_x2, mask_y2 = 0, 0, (x2 - x1), (y2 - y1)
-                        
-                        # Downsample mask for efficiency (max 64x64)
-                        h, w = mask_tensor.shape
-                        max_size = 64
-                        if h > max_size or w > max_size:
-                            # Calculate downsample factor
-                            scale = min(max_size / h, max_size / w)
-                            new_h, new_w = int(h * scale), int(w * scale)
-                            
-                            # Use cv2 for efficient downsampling
-                            import cv2
-                            mask_resized = cv2.resize(mask_tensor.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-                            mask_data = mask_resized.astype(int).tolist()
-                            logger.info(f"Mask downsampled from {h}x{w} to {new_h}x{new_w}")
-                            
-                            # IMPORTANT: DO NOT scale the coordinates
-                            # The mask coordinates should remain in the original bounding box space
-                            # Only the mask data is downsampled, not the position
-                            logger.info(f"Mask coordinates kept in original space: x1={mask_x1}, y1={mask_y1}, x2={mask_x2}, y2={mask_y2}")
-                        else:
-                            # Convert to list for JSON serialization if already small
-                            mask_data = mask_tensor.astype(int).tolist()
-                            logger.info(f"Mask used as-is: {h}x{w}")
-                        
-                        # Include mask position data for proper alignment
-                        # mask_x1, mask_y1, mask_x2, mask_y2 are already relative to the bounding box
-                        # We need to scale them to percentages of the bounding box's width and height
-                        bbox_width = x2 - x1
-                        bbox_height = y2 - y1
-                        
-                        mask_info = {
-                            "data": mask_data,
-                            "x": float(round((mask_x1 / bbox_width) * 100, 2)),
-                            "y": float(round((mask_y1 / bbox_height) * 100, 2)),
-                            "width": float(round(((mask_x2 - mask_x1) / bbox_width) * 100, 2)),
-                            "height": float(round(((mask_y2 - mask_y1) / bbox_height) * 100, 2))
-                        }
-                        
-                        logger.info(f"Mask info: {mask_info}")
-                    elif is_segmentation:
-                        logger.warning(f"Expected mask but not available for box {i} (masks: {masks is not None}, i: {i}, len(masks.data): {len(masks.data) if masks else 'N/A'})")
+                    mask_info = None
+                    if is_segmentation:
+                        mask_info = process_mask_data(masks, i, x1, y1, x2, y2, img_width, img_height)
 
                     # Get config for this class
                     config = OBJECT_CONFIG.get(class_name, {})
@@ -965,9 +1028,9 @@ async def process_detections(image, results, deep_analysis=False):
                     is_analyzable = config.get("is_analyzable", False)
 
                     analysis_text = ""
-                    logger.info(f"Analysis check: deep_analysis={deep_analysis}, is_analyzable={is_analyzable}, confidence={confidence}")
+                    logger.info(f"Analysis check: deep_analysis={deep_analysis}, is_analyzable={is_analyzable}, confidence={confidence}, vision_model={vision_model}")
                     if deep_analysis and is_analyzable and confidence > 0.75:
-                        logger.info(f"Starting Florence2 analysis for {class_name} with confidence {confidence}")
+                        logger.info(f"Starting {vision_model} analysis for {class_name} with confidence {confidence}")
                         try:
                             pad = 40
                             cx1 = max(0, int(x1) - pad)
@@ -981,19 +1044,38 @@ async def process_detections(image, results, deep_analysis=False):
                                 logger.warning(f"Crop too small: {person_image.size}")
                                 analysis_text = "Crop too small"
                             else:
-                                # Using just the task token to avoid 'only one token' error
-                                florence_results = await run_florence_analysis(person_image, "<DETAILED_CAPTION>")
-                                
-                                if "<DETAILED_CAPTION>" in florence_results:
-                                    analysis_text = florence_results["<DETAILED_CAPTION>"]
-                                elif "<CAPTION>" in florence_results:
-                                    analysis_text = florence_results["<CAPTION>"]
+                                # Use the selected vision model
+                                if vision_model == 'florence2':
+                                    florence_results = await run_florence_analysis(person_image, "<DETAILED_CAPTION>")
+                                    
+                                    if "<DETAILED_CAPTION>" in florence_results:
+                                        analysis_text = florence_results["<DETAILED_CAPTION>"]
+                                    elif "<CAPTION>" in florence_results:
+                                        analysis_text = florence_results["<CAPTION>"]
+                                    else:
+                                        analysis_text = next(iter(florence_results.values())) if florence_results else "No caption"
+                                        
+                                elif vision_model == 'glm4.6v':
+                                    analysis_text = await run_glm_analysis(person_image, f"Analyze this {class_name} in detail.")
+                                    
+                                elif vision_model == 'samsung-trm':
+                                    analysis_text = await run_samsung_trm_analysis(person_image, f"Analyze this {class_name} in detail.")
+                                    
                                 else:
-                                    analysis_text = next(iter(florence_results.values())) if florence_results else "No caption"
+                                    # Default to Florence-2 for unknown models
+                                    logger.warning(f"Unknown vision model: {vision_model}, defaulting to Florence-2")
+                                    florence_results = await run_florence_analysis(person_image, "<DETAILED_CAPTION>")
+                                    
+                                    if "<DETAILED_CAPTION>" in florence_results:
+                                        analysis_text = florence_results["<DETAILED_CAPTION>"]
+                                    elif "<CAPTION>" in florence_results:
+                                        analysis_text = florence_results["<CAPTION>"]
+                                    else:
+                                        analysis_text = next(iter(florence_results.values())) if florence_results else "No caption"
                                 
-                            logger.info(f"Florence analysis: {analysis_text}")
+                                logger.info(f"{vision_model} analysis: {analysis_text}")
                         except Exception as e:
-                            logger.error(f"Florence analysis failed: {str(e)}")
+                            logger.error(f"{vision_model} analysis failed: {str(e)}")
                             analysis_text = f"Analysis error: {str(e)[:50]}"
 
                     detection_data = {
@@ -1047,6 +1129,15 @@ async def process_detections(image, results, deep_analysis=False):
     # NEW: Fallback for when YOLO fails to find any objects
     if not response_data:
         logger.info("YOLO failed to detect objects. Falling back to Scene Analysis.")
+        # Run Florence analysis on the full image
+        try:
+            florence_results = await run_florence_analysis(image, "<DETAILED_CAPTION>")
+            scene_analysis = florence_results.get("<DETAILED_CAPTION>", florence_results.get("<CAPTION>", "No analysis available"))
+            logger.info(f"Scene analysis completed: {scene_analysis[:100]}...")
+        except Exception as e:
+            logger.error(f"Scene analysis failed: {e}")
+            scene_analysis = "Scene analysis unavailable"
+        
         response_data.append({
             "x": 0.0,
             "y": 0.0,
@@ -1054,7 +1145,7 @@ async def process_detections(image, results, deep_analysis=False):
             "height": 100.0,
             "color": "#00FFFF",
             "type": "scene",
-            "analysis": "",
+            "analysis": scene_analysis,
             "confidence": 1.0,
             "is_analyzable": True,
             "category": "Misc"

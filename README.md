@@ -73,10 +73,23 @@ pip install -r requirements.txt
 # Create images folder (Optional: Required if "Save Scanned Images" is enabled)
 mkdir images
 
-# Run the server
+# Run the server (or use the launcher for auto-start, see below)
 py -3.12 server.py
 # Server will start on http://localhost:8001
 ```
+
+### 2b. Optional: Auto-start server when you first scan
+To avoid running `py -3.12 server.py` every time, run the **launcher** once (or add it to Windows Startup). The extension will then ask the launcher to start the server automatically when you first scan an image or summarize text.
+
+```bash
+# Run the launcher (leave it running in the background)
+py -3.12 launcher.py
+# Listens on http://localhost:8766 — first scan/summarize will start server.py for you
+```
+
+You can add `py -3.12 launcher.py` to Windows Startup (e.g. create a shortcut in `Shell:Startup`) so the launcher is always available.
+
+**Freeing memory when you're done:** The server **auto-stops after 20 minutes** with no API requests so GPU/RAM is free for other models. You can also click **Stop server** in the extension popup to ask the launcher to stop the server immediately (only works if the server was started by the launcher).
 
 ### 3. Setup the Extension
 ```bash

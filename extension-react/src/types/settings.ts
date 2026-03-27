@@ -3,6 +3,8 @@ export interface Settings {
     detectionEndpoint: string;
     detectionModel: string; // New field for model selection
     enableSummarization: boolean;
+    verySimpleSummary: boolean;
+    enableStreaming: boolean;
     summarizationEndpoint: string;
     summarizationModel: string;
     minSummaryChars: number;
@@ -22,8 +24,10 @@ export const DEFAULT_SETTINGS: Settings = {
     detectionEndpoint: "http://localhost:8001/api/detect-base64",
     detectionModel: "segmentation", // Default to segmentation model
     enableSummarization: true,
+    verySimpleSummary: false,
+    enableStreaming: true,
     summarizationEndpoint: "http://localhost:8001/api/summarize",
-    summarizationModel: "zai-org/glm-4.6v-flash",
+    summarizationModel: "Qwen2.5-0.5B-Instruct",
     minSummaryChars: 40,
     toggleActivation: true,
     saveScannedImages: false,

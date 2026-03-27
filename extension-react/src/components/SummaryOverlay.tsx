@@ -7,6 +7,7 @@ import type { SummaryResult } from '../services/textSummarizer'
 interface SummaryOverlayProps {
     selection: TextSelection | null
     summaryResult: SummaryResult | null
+    streamingText: string
     isSummarizing: boolean
     error: string
     mousePos: { x: number; y: number }
@@ -15,6 +16,7 @@ interface SummaryOverlayProps {
 const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
     selection,
     summaryResult,
+    streamingText,
     isSummarizing,
     error,
     mousePos,
@@ -94,6 +96,11 @@ const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
                                     <div className="flex items-start gap-2 text-red-400 text-sm">
                                         <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                                         <span>{error}</span>
+                                    </div>
+                                ) : streamingText ? (
+                                    <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                                        {streamingText}
+                                        <span className="inline-block w-2 h-4 bg-cyan-400 animate-pulse ml-1" />
                                     </div>
                                 ) : summaryResult?.summary ? (
                                     <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">

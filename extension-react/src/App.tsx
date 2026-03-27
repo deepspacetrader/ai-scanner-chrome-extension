@@ -293,7 +293,7 @@ function App() {
           <div className="theme-content" style={{ paddingLeft: '10px', borderLeft: '2px solid #ddd', marginBottom: '15px' }}>
             <div className="theme-setting">
               <label className="theme-label">Vision Model:</label>
-              <div className="theme-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: '10px' }}>
+              <div className="theme-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: '10px' }}>
                 <div
                   className={`theme-option ${settings.visionModel === 'florence2' ? 'selected' : ''}`}
                   onClick={() => handleChange('visionModel', 'florence2')}
@@ -389,6 +389,28 @@ function App() {
         {settings.enableSummarization && (
           <div className="theme-content" style={{ paddingLeft: '10px', borderLeft: '2px solid #ddd' }}>
             <div className="theme-setting">
+              <label className="theme-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={settings.verySimpleSummary}
+                  onChange={(e) => handleChange('verySimpleSummary', e.target.checked)}
+                />
+                Very Simple Summary
+              </label>
+            </div>
+
+            <div className="theme-setting">
+              <label className="theme-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={settings.enableStreaming}
+                  onChange={(e) => handleChange('enableStreaming', e.target.checked)}
+                />
+                Enable Streaming (Live Text Generation)
+              </label>
+            </div>
+
+            <div className="theme-setting">
               <label className="theme-label">Local Summarization API URL:</label>
               <input
                 type="text"
@@ -400,12 +422,24 @@ function App() {
 
             <div className="theme-setting">
               <label className="theme-label">Model ID:</label>
-              <input
-                type="text"
+              <select
                 className="theme-input"
                 value={settings.summarizationModel}
                 onChange={(e) => handleChange('summarizationModel', e.target.value)}
-              />
+              >
+                <option value="Qwen2.5-0.5B-Instruct">Qwen2.5-0.5B-Instruct (Fast)</option>
+                <option value="custom">Custom Model</option>
+              </select>
+              {settings.summarizationModel === 'custom' && (
+                <input
+                  type="text"
+                  className="theme-input"
+                  value={settings.summarizationModel === 'custom' ? settings.summarizationModel : ''}
+                  onChange={(e) => handleChange('summarizationModel', e.target.value)}
+                  placeholder="Enter custom model name"
+                  style={{ marginTop: '5px' }}
+                />
+              )}
             </div>
           </div>
         )}
@@ -418,6 +452,9 @@ function App() {
               status === 'checking' ? 'Checking...' :
                 'Disconnected - check API URL'}
           </div>
+          <p style={{ fontSize: '10px', color: '#888', margin: '4px 0 0', lineHeight: '1.3' }}>
+            Server auto-stops after 20 min of no use to free GPU/RAM.
+          </p>
         </div>
 
         <div className="theme-buttons">

@@ -138,7 +138,7 @@ export function useVideoScanner(
             return
         }
 
-        const res = await imageScanner.detectImageData(frameData, saveScannedImages)
+        const res = await imageScanner.detectImageData(frameData, saveScannedImages, visionModel)
 
         // Only update if we are still hovering the same video
         if (video === hoveredVideoRef.current) {

@@ -99,7 +99,7 @@ export class ImageScannerService {
         return ""
     }
 
-    public async detectImage(img: HTMLImageElement | Element, save: boolean = false): Promise<DetectionResult | null> {
+    public async detectImage(img: HTMLImageElement | Element, save: boolean = false, visionModel?: string): Promise<DetectionResult | null> {
         // Ensure settings are loaded
         await this.loadSettings()
         
@@ -122,7 +122,7 @@ export class ImageScannerService {
             let result: DetectionResult | null = null
 
             if (base64) {
-                result = await this.fetchDetection(base64, srcKey, save)
+                result = await this.fetchDetection(base64, srcKey, save, visionModel)
             } else {
                 // Fallback to URL detection
                 result = await this.fetchDetectionByUrl(srcKey)
@@ -145,7 +145,7 @@ export class ImageScannerService {
         }
     }
 
-    public async detectImageData(base64Data: string, save: boolean = false): Promise<DetectionResult | null> {
+    public async detectImageData(base64Data: string, save: boolean = false, visionModel?: string): Promise<DetectionResult | null> {
         // Ensure settings are loaded
         await this.loadSettings()
         
@@ -155,7 +155,7 @@ export class ImageScannerService {
         try {
             // The key for video frames is transient, so we create a temporary one.
             const transientKey = `videoframe:${Date.now()}`
-            const result = await this.fetchDetection(base64Data, transientKey, save)
+            const result = await this.fetchDetection(base64Data, transientKey, save, visionModel)
 
             if (result) {
                 result.image = base64Data
@@ -172,12 +172,15 @@ export class ImageScannerService {
         }
     }
 
-    private async fetchDetection(base64: string, _key: string, save: boolean = false): Promise<DetectionResult | null> {
+    private async fetchDetection(base64: string, _key: string, save: boolean = false, visionModel?: string): Promise<DetectionResult | null> {
         try {
+            const visionModelToUse = visionModel || "florence2"
+            console.log(`AI SCANNER DETECT: Using vision model: ${visionModelToUse}`)
+            
             const response = await fetch(this.settings.detectionEndpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ image: base64, save })
+                body: JSON.stringify({ image: base64, save, vision_model: visionModelToUse })
             })
             if (!response.ok) throw new Error("API Error")
             const apiResponse = await response.json()
@@ -252,7 +255,15 @@ export class ImageScannerService {
         await this.loadSettings()
         
         try {
+            console.log(`AI SCANNER: Analyzing box with vision model: ${visionModel}`)
+            console.log(`AI SCANNER: Box coordinates: x=${x}, y=${y}, w=${width}, h=${height}, type=${type}`)
+            
+            console.log(`AI SCANNER: Using backend model: ${visionModel}`)
+            console.log(`AI SCANNER: Backend endpoint: ${this.settings.detectionEndpoint}`)
+            // Original Florence2 logic
             const endpoint = this.settings.detectionEndpoint.replace("/api/detect-base64", "/api/analyze-box")
+            console.log(`AI SCANNER: Analysis endpoint: ${endpoint}`)
+            
             const response = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },

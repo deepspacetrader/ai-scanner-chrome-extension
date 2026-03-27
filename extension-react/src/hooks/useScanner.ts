@@ -159,7 +159,7 @@ export function useScanner(
             return
         }
 
-        const res = await imageScanner.detectImageData(frameData, saveScannedImages)
+        const res = await imageScanner.detectImageData(frameData, saveScannedImages, visionModel)
 
         if (hoveredElement === video) {
             setDetectionResult(res)
@@ -205,7 +205,7 @@ export function useScanner(
                         }
                     } else {
                         setIsScanning(true)
-                        const res = await imageScanner.detectImage(el, saveScannedImages)
+                        const res = await imageScanner.detectImage(el, saveScannedImages, visionModel)
                         if (el === findElementUnderCursor(e)) {
                             setDetectionResult(res)
                             setIsScanning(false)

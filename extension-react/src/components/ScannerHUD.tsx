@@ -23,6 +23,8 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
         endpoint: settings.summarizationEndpoint,
         model: settings.summarizationModel,
         minChars: settings.minSummaryChars,
+        verySimpleSummary: settings.verySimpleSummary,
+        stream: settings.enableStreaming
     }
 
     // Scanner for images
@@ -68,6 +70,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
     const {
         selection,
         summaryResult,
+        streamingText,
         isSummarizing,
         error: summaryError,
     } = useTextSummarization(isActive && settings.enableSummarization, summarySettings)
@@ -506,15 +509,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
 
                             // TEMP: Show all detections to test - remove filtering
                             const analyzableDetections = detectionResult.data
-                                //.filter(d => {
-                                //    const isScene = d.type === 'scene'
-                                //    const category = d.category || "Misc"
-                                //    const threshold = settings.categoryThresholds?.[category] ?? settings.deepAnalysisThreshold
-                                //    const isAnalyzable = d.is_analyzable
-                                //    console.log(`Detection filter - type: ${d.type}, confidence: ${d.confidence}, threshold: ${threshold}, isAnalyzable: ${isAnalyzable}, isScene: ${isScene}, passes: ${isAnalyzable && (isScene || (d.confidence >= threshold))}`)
-                                //    // Show scenes always, or high-confidence objects
-                                //    return isAnalyzable && (isScene || (d.confidence >= threshold))
-                                //})
+                                .filter(d => d.analysis && d.analysis.trim() !== '' && d.analysis !== '...')
                                 .sort((a, b) => a.y - b.y);
                             
                             // Debug: Log what detections have analysis
@@ -650,14 +645,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                         {/* On-video analysis sidebar and lines */}
                         {hoveredVideo && detectionResult?.data && (() => {
                             const analyzableDetections = detectionResult.data
-                                //.filter(d => {
-                                //    const isScene = d.type === 'scene'
-                                //    const category = d.category || "Misc"
-                                //    const threshold = settings.categoryThresholds?.[category] ?? settings.deepAnalysisThreshold
-                                //    const isAnalyzable = d.is_analyzable
-                                //    // Show scenes always, or high-confidence objects
-                                //    return isAnalyzable && (isScene || (d.confidence >= threshold))
-                                //})
+                                .filter(d => d.analysis && d.analysis.trim() !== '' && d.analysis !== '...')
                                 .sort((a, b) => a.y - b.y);
                             
                             // Debug: Log what video detections have analysis
@@ -797,6 +785,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                 <SummaryOverlay
                     selection={selection}
                     summaryResult={summaryResult}
+                    streamingText={streamingText}
                     isSummarizing={isSummarizing}
                     error={summaryError}
                     mousePos={activeMousePos}
