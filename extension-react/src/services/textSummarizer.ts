@@ -11,8 +11,15 @@ export interface SummarySettings {
     model: string
     minChars: number
     verySimpleSummary?: boolean
+    summaryDetailLevel?: 'very_simple' | 'normal' | 'slightly_longer'
     systemPrompt?: string
     stream?: boolean
+    mode?: string
+    category?: string
+    type?: string
+    model_provider?: 'integrated' | 'lm_studio'
+    lm_studio_model?: string
+    lm_studio_url?: string
 }
 
 export interface StreamingSummaryResult {
@@ -62,6 +69,8 @@ class TextSummarizer {
      * @param wakeRetried internal: true after one wake-and-retry to avoid infinite loop
      */
     async summarize(text: string, settings: SummarySettings): Promise<SummaryResult> {
+        console.log('=== TEXT SUMMARIZER CALLED ===')
+        console.log('Settings:', settings)
         // Truncate if too long
         const truncated = text.slice(0, this.maxInputChars)
         const key = this.generateKey(truncated)
@@ -69,6 +78,7 @@ class TextSummarizer {
         // Check cache
         const cached = this.cache.get(key)
         if (cached) {
+            console.log('Returning cached result')
             return cached
         }
 
@@ -82,19 +92,40 @@ class TextSummarizer {
         try {
             // Make API request to our local server
             // The endpoint is typically http://localhost:8001/api/summarize
+            console.log('Summarizer endpoint:', settings.endpoint)
+            console.log('Request payload:', {
+                text: truncated.substring(0, 100) + '...',
+                mode: settings.mode,
+                category: settings.category,
+                type: settings.type,
+                verySimpleSummary: settings.verySimpleSummary,
+                system_prompt: settings.systemPrompt,
+                stream: settings.stream || false,
+                model_provider: settings.model_provider || 'integrated',
+                lm_studio_model: settings.lm_studio_model,
+                lm_studio_url: settings.lm_studio_url || 'http://localhost:1234'
+            })
             const response = await fetch(settings.endpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    ...settings,
                     text: truncated,
-                    endpoint: undefined, // Don't send endpoint to itself
-                    stream: settings.stream || false
+                    mode: settings.mode,
+                    category: settings.category,
+                    type: settings.type,
+                    verySimpleSummary: settings.verySimpleSummary,
+                    summaryDetailLevel: settings.summaryDetailLevel || 'normal',
+                    system_prompt: settings.systemPrompt,
+                    stream: settings.stream || false,
+                    model_provider: settings.model_provider || 'integrated',
+                    lm_studio_model: settings.lm_studio_model,
+                    lm_studio_url: settings.lm_studio_url || 'http://localhost:1234'
                 }),
                 signal,
             })
+            console.log('Response status:', response.status)
 
             if (!response.ok) {
                 // Ignore errors from aborted requests
@@ -142,7 +173,7 @@ class TextSummarizer {
                 const summaryText = this.postProcess(fullText)
 
                 if (!summaryText) {
-                    throw new Error('Local summarizer returned an empty response')
+                    throw new Error('Local summarizer returned an empty response 1')
                 }
 
                 const result: SummaryResult = {
@@ -163,6 +194,9 @@ class TextSummarizer {
             } else {
                 // Handle non-streaming response (original behavior)
                 const data = await response.json()
+                console.log('Summarizer response data:', data)
+                console.log('data.summary:', data.summary)
+                console.log('typeof data.summary:', typeof data.summary)
 
                 // If the backend returned a cancellation notice or we are aborted locally
                 if (data.cancelled || signal.aborted) {
@@ -170,9 +204,12 @@ class TextSummarizer {
                 }
 
                 const summaryText = this.postProcess(data.summary || '')
+                console.log('Processed summary text:', summaryText)
+                console.log('summaryText length:', summaryText.length)
 
                 if (!summaryText) {
-                    throw new Error('Local summarizer returned an empty response')
+                    console.error('Empty summary received. Full response:', data)
+                    throw new Error('Local summarizer returned an empty response 2')
                 }
 
                 const result: SummaryResult = {
@@ -231,10 +268,16 @@ class TextSummarizer {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    ...settings,
                     text: truncated,
-                    endpoint: undefined, // Don't send endpoint to itself
-                    stream: true
+                    mode: settings.mode,
+                    category: settings.category,
+                    type: settings.type,
+                    verySimpleSummary: settings.verySimpleSummary,
+                    system_prompt: settings.systemPrompt,
+                    stream: true,
+                    model_provider: settings.model_provider || 'integrated',
+                    lm_studio_model: settings.lm_studio_model,
+                    lm_studio_url: settings.lm_studio_url || 'http://localhost:1234'
                 }),
                 signal,
             })
@@ -290,7 +333,7 @@ class TextSummarizer {
             const summaryText = this.postProcess(finalText)
 
             if (!summaryText) {
-                throw new Error('Local summarizer returned an empty response')
+                throw new Error('Local summarizer returned an empty response 3')
             }
 
             const result: SummaryResult = {

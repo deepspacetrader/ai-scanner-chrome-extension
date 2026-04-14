@@ -3,7 +3,7 @@ export interface Settings {
     detectionEndpoint: string;
     detectionModel: string; // New field for model selection
     enableSummarization: boolean;
-    verySimpleSummary: boolean;
+    summaryDetailLevel: 'very_simple' | 'normal' | 'slightly_longer';
     enableStreaming: boolean;
     summarizationEndpoint: string;
     summarizationModel: string;
@@ -17,6 +17,9 @@ export interface Settings {
     enableSound: boolean;
     soundVolume: number;
     visionModel: string;
+    summarizationModelProvider: 'integrated' | 'lm_studio';
+    lmStudioModel: string;
+    lmStudioUrl: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -24,7 +27,7 @@ export const DEFAULT_SETTINGS: Settings = {
     detectionEndpoint: "http://localhost:8001/api/detect-base64",
     detectionModel: "segmentation", // Default to segmentation model
     enableSummarization: true,
-    verySimpleSummary: false,
+    summaryDetailLevel: 'normal',
     enableStreaming: true,
     summarizationEndpoint: "http://localhost:8001/api/summarize",
     summarizationModel: "Qwen2.5-0.5B-Instruct",
@@ -48,5 +51,8 @@ export const DEFAULT_SETTINGS: Settings = {
     },
     enableSound: true,
     soundVolume: 1,
-    visionModel: 'florence2'
+    visionModel: 'florence2',
+    summarizationModelProvider: 'integrated',
+    lmStudioModel: '',
+    lmStudioUrl: 'http://localhost:1234'
 };

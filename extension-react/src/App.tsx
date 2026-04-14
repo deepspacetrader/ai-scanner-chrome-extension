@@ -8,6 +8,9 @@ function App() {
   const [message, setMessage] = useState<string>('');
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
+  const [lmStudioStatus, setLmStudioStatus] = useState<'connected' | 'disconnected' | 'loading' | 'connected_no_list'>('loading');
+  const [lmStudioMessage, setLmStudioMessage] = useState<string>('');
 
   useEffect(() => {
     // Load settings
@@ -21,6 +24,25 @@ function App() {
           // Auto-migrate from Granite to Qwen if old model is detected
           if (mergedSettings.summarizationModel.toLowerCase().includes('granite')) {
             mergedSettings.summarizationModel = DEFAULT_SETTINGS.summarizationModel;
+          }
+
+          // Migrate new LM Studio fields if not present
+          if (!mergedSettings.summarizationModelProvider) {
+            mergedSettings.summarizationModelProvider = DEFAULT_SETTINGS.summarizationModelProvider;
+          }
+          if (!mergedSettings.lmStudioModel) {
+            mergedSettings.lmStudioModel = DEFAULT_SETTINGS.lmStudioModel;
+          }
+          if (!mergedSettings.lmStudioUrl) {
+            mergedSettings.lmStudioUrl = DEFAULT_SETTINGS.lmStudioUrl;
+          }
+          // Migrate verySimpleSummary to summaryDetailLevel
+          const oldResult = result as any;
+          if (oldResult.verySimpleSummary !== undefined) {
+            mergedSettings.summaryDetailLevel = oldResult.verySimpleSummary ? 'very_simple' : 'normal';
+          }
+          if (!mergedSettings.summaryDetailLevel) {
+            mergedSettings.summaryDetailLevel = DEFAULT_SETTINGS.summaryDetailLevel;
           }
 
           setSettings(mergedSettings as Settings);
@@ -38,6 +60,31 @@ function App() {
       });
     }
   }, []);
+
+  const fetchLmStudioModels = async () => {
+    setLmStudioStatus('loading');
+    setLmStudioMessage('');
+    try {
+      const response = await fetch('http://localhost:8001/api/lm-studio/models');
+      const data = await response.json();
+      if (data.status === 'connected') {
+        setLmStudioModels(data.models || []);
+        setLmStudioStatus('connected');
+      } else if (data.status === 'connected_no_list') {
+        setLmStudioModels([]);
+        setLmStudioStatus('connected_no_list');
+        setLmStudioMessage(data.message || 'Enter model name manually');
+      } else {
+        setLmStudioModels([]);
+        setLmStudioStatus('disconnected');
+        setLmStudioMessage(data.error || 'Could not connect to LM Studio');
+      }
+    } catch (error) {
+      setLmStudioModels([]);
+      setLmStudioStatus('disconnected');
+      setLmStudioMessage('Connection failed');
+    }
+  };
 
   const handleChange = (key: keyof Settings, value: any) => {
     setSettings((prev: Settings) => ({ ...prev, [key]: value }));
@@ -392,17 +439,6 @@ function App() {
               <label className="theme-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                 <input
                   type="checkbox"
-                  checked={settings.verySimpleSummary}
-                  onChange={(e) => handleChange('verySimpleSummary', e.target.checked)}
-                />
-                Very Simple Summary
-              </label>
-            </div>
-
-            <div className="theme-setting">
-              <label className="theme-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
                   checked={settings.enableStreaming}
                   onChange={(e) => handleChange('enableStreaming', e.target.checked)}
                 />
@@ -411,36 +447,120 @@ function App() {
             </div>
 
             <div className="theme-setting">
-              <label className="theme-label">Local Summarization API URL:</label>
-              <input
-                type="text"
-                className="theme-input"
-                value={settings.summarizationEndpoint}
-                onChange={(e) => handleChange('summarizationEndpoint', e.target.value)}
-              />
+              <label className="theme-label">Summary Detail Level:</label>
+              <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+                  <input
+                    type="radio"
+                    name="summaryDetailLevel"
+                    value="very_simple"
+                    checked={settings.summaryDetailLevel === 'very_simple'}
+                    onChange={(e) => handleChange('summaryDetailLevel', e.target.value as 'very_simple' | 'normal' | 'slightly_longer')}
+                  />
+                  Very Simple
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+                  <input
+                    type="radio"
+                    name="summaryDetailLevel"
+                    value="normal"
+                    checked={settings.summaryDetailLevel === 'normal'}
+                    onChange={(e) => handleChange('summaryDetailLevel', e.target.value as 'very_simple' | 'normal' | 'slightly_longer')}
+                  />
+                  Normal
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+                  <input
+                    type="radio"
+                    name="summaryDetailLevel"
+                    value="slightly_longer"
+                    checked={settings.summaryDetailLevel === 'slightly_longer'}
+                    onChange={(e) => handleChange('summaryDetailLevel', e.target.value as 'very_simple' | 'normal' | 'slightly_longer')}
+                  />
+                  Slightly Longer
+                </label>
+              </div>
             </div>
 
             <div className="theme-setting">
-              <label className="theme-label">Model ID:</label>
+              <label className="theme-label">Text Summarization Model:</label>
               <select
                 className="theme-input"
-                value={settings.summarizationModel}
-                onChange={(e) => handleChange('summarizationModel', e.target.value)}
+                value={settings.summarizationModelProvider}
+                onChange={(e) => handleChange('summarizationModelProvider', e.target.value as 'integrated' | 'lm_studio')}
               >
-                <option value="Qwen2.5-0.5B-Instruct">Qwen2.5-0.5B-Instruct (Fast)</option>
-                <option value="custom">Custom Model</option>
+                <option value="integrated">Integrated Qwen2.5-0.5B-Instruct (Fast)</option>
+                <option value="lm_studio">LM Studio</option>
               </select>
-              {settings.summarizationModel === 'custom' && (
-                <input
-                  type="text"
-                  className="theme-input"
-                  value={settings.summarizationModel === 'custom' ? settings.summarizationModel : ''}
-                  onChange={(e) => handleChange('summarizationModel', e.target.value)}
-                  placeholder="Enter custom model name"
-                  style={{ marginTop: '5px' }}
-                />
-              )}
             </div>
+
+            {settings.summarizationModelProvider === 'lm_studio' && (
+              <>
+                <div className="theme-setting">
+                  <label className="theme-label">LM Studio URL:</label>
+                  <input
+                    type="text"
+                    className="theme-input"
+                    value={settings.lmStudioUrl}
+                    onChange={(e) => handleChange('lmStudioUrl', e.target.value)}
+                    placeholder="http://localhost:1234"
+                  />
+                </div>
+
+                <div className="theme-setting">
+                  <label className="theme-label">
+                    LM Studio Model:
+                    {lmStudioStatus === 'loading' && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#888' }}>Loading...</span>}
+                    {lmStudioStatus === 'disconnected' && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#f44' }}>Disconnected</span>}
+                  </label>
+                  {lmStudioStatus === 'connected' && lmStudioModels.length > 0 ? (
+                    <>
+                      <select
+                        className="theme-input"
+                        value={settings.lmStudioModel}
+                        onChange={(e) => handleChange('lmStudioModel', e.target.value)}
+                      >
+                        <option value="">Select a model...</option>
+                        {lmStudioModels.map((model) => (
+                          <option key={model} value={model}>{model}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="theme-btn theme-btn-secondary"
+                        onClick={fetchLmStudioModels}
+                        style={{ marginTop: '5px', fontSize: '11px', padding: '4px 8px' }}
+                      >
+                        Refresh Models
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        className="theme-input"
+                        value={settings.lmStudioModel}
+                        onChange={(e) => handleChange('lmStudioModel', e.target.value)}
+                        placeholder="Enter model name (e.g., nvidia/nemotron-3-nano-4b)"
+                      />
+                      {lmStudioMessage && (
+                        <p style={{ fontSize: '10px', color: '#888', margin: '4px 0 0' }}>
+                          {lmStudioMessage}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        className="theme-btn theme-btn-secondary"
+                        onClick={fetchLmStudioModels}
+                        style={{ marginTop: '5px', fontSize: '11px', padding: '4px 8px' }}
+                      >
+                        Try Auto-Detect
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 

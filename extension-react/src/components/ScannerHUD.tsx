@@ -20,11 +20,19 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
     const [isHoveringText, setIsHoveringText] = useState(false)
     const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
     const summarySettings: SummarySettings = {
-        endpoint: settings.summarizationEndpoint,
-        model: settings.summarizationModel,
+        endpoint: settings.detectionEndpoint.replace('/api/detect-base64', '/api/summarize'),
+        model: settings.summarizationModelProvider === 'lm_studio' ? settings.lmStudioModel : settings.summarizationModel,
         minChars: settings.minSummaryChars,
-        verySimpleSummary: settings.verySimpleSummary,
-        stream: settings.enableStreaming
+        verySimpleSummary: settings.summaryDetailLevel === 'very_simple',
+        summaryDetailLevel: settings.summaryDetailLevel,
+        systemPrompt: undefined,
+        stream: settings.enableStreaming,
+        mode: 'summarize',
+        category: undefined,
+        type: undefined,
+        model_provider: settings.summarizationModelProvider,
+        lm_studio_model: settings.lmStudioModel,
+        lm_studio_url: settings.lmStudioUrl
     }
 
     // Scanner for images
@@ -789,6 +797,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                     isSummarizing={isSummarizing}
                     error={summaryError}
                     mousePos={activeMousePos}
+                    summaryDetailLevel={settings.summaryDetailLevel}
                 />
             )}
 

@@ -11,6 +11,7 @@ interface SummaryOverlayProps {
     isSummarizing: boolean
     error: string
     mousePos: { x: number; y: number }
+    summaryDetailLevel?: 'very_simple' | 'normal' | 'slightly_longer'
 }
 
 const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
@@ -20,8 +21,34 @@ const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
     isSummarizing,
     error,
     mousePos,
+    summaryDetailLevel,
 }) => {
     const [position, setPosition] = useState({ left: 0, top: 0 })
+
+    // Format model name for display
+    const formatModelName = (model: string): string => {
+        if (!model) return 'Unknown'
+        // If it's a path like 'nvidia/nemotron-3-nano-4b', extract just the name
+        if (model.includes('/')) {
+            return model.split('/').pop() || model
+        }
+        // If it's very long, truncate it
+        if (model.length > 20) {
+            return model.substring(0, 20) + '...'
+        }
+        return model
+    }
+
+    // Format summary detail level for display
+    const formatDetailLevel = (level?: string): string => {
+        if (!level) return ''
+        switch (level) {
+            case 'very_simple': return 'Very Simple'
+            case 'normal': return 'Normal'
+            case 'slightly_longer': return 'Slightly Longer'
+            default: return ''
+        }
+    }
 
     useEffect(() => {
         if (!selection) return
@@ -122,7 +149,7 @@ const SummaryOverlay: React.FC<SummaryOverlayProps> = ({
                             {summaryResult?.model && (
                                 <div className="flex items-center gap-2 pt-2 border-t border-cyan-500/20">
                                     <div className="flex-1 text-[10px] uppercase tracking-widest text-slate-500 font-mono">
-                                        Local · {summaryResult.model}
+                                        Local · {formatModelName(summaryResult.model)} · {formatDetailLevel(summaryDetailLevel)}
                                     </div>
                                     <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.8)]" />
                                 </div>

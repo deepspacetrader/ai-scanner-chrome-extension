@@ -37,14 +37,24 @@ _last_activity: float | None = None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global model variables - will be loaded on startup
+# Global model variables - loaded on demand
 yolo_model = None
 florence_model = None
 florence_processor = None
 summarizer_model = None
 summarizer_tokenizer = None
 samsung_trm_model = None # TRM for recursive reasoning
+vision_model_obj = None
+vision_processor_obj = None
 current_summarize_id = 0  # To track and cancel old summarization requests
+
+# Model loading locks to prevent concurrent loading
+import threading
+_yolo_lock = threading.Lock()
+_florence_lock = threading.Lock()
+_summarizer_lock = threading.Lock()
+_vision_lock = threading.Lock()
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # Set dtype based on device availability
 dtype = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -70,37 +80,28 @@ current_model_config = AVAILABLE_MODELS[current_model_type]
 
 # GLM-Edge/Qwen-VL Local Model configuration
 GLM_LOCAL_MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
-vision_model_obj = None
-vision_processor_obj = None
 
 logger.info(f"Using device: {device} with dtype: {dtype}")
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    global yolo_model, florence_model, florence_processor, summarizer_model, summarizer_tokenizer, vision_model_obj, vision_processor_obj, samsung_trm_model
-    try:
-        # Load YOLO model based on current configuration
+# Lazy loading functions
+def load_yolo_model():
+    """Load YOLO model on demand"""
+    global yolo_model
+    with _yolo_lock:
+        if yolo_model is not None:
+            return yolo_model
         logger.info(f"Loading {current_model_config['name']} model...")
         yolo_model = YOLO(current_model_config['model_file'])
         yolo_model.to(device)
         logger.info(f"{current_model_config['name']} model loaded successfully on {device}")
+        return yolo_model
 
-        # Load Qwen2.5-0.5B-Instruct for extreme speed on RTX 4070 Super.
-        # At 0.5B params in FP16, it uses ~1.1GB VRAM and generates almost instantly.
-        logger.info("Loading Qwen2.5-0.5B-Instruct...")
-        summarizer_model_id = 'Qwen/Qwen2.5-0.5B-Instruct'
-        
-        summarizer_tokenizer = AutoTokenizer.from_pretrained(summarizer_model_id)
-        summarizer_model = AutoModelForCausalLM.from_pretrained(
-            summarizer_model_id,
-            trust_remote_code=True,
-            dtype=torch.float16,
-            device_map="auto"
-        )
-        logger.info("Qwen2.5-0.5B-Instruct loaded successfully")
-
-        # Load Florence-2 last as it's the largest single-block model
+def load_florence_model():
+    """Load Florence-2 model on demand"""
+    global florence_model, florence_processor
+    with _florence_lock:
+        if florence_model is not None:
+            return florence_model, florence_processor
         logger.info("Loading Florence-2-large model...")
         florence_model_id = 'microsoft/Florence-2-large'
         florence_model = AutoModelForCausalLM.from_pretrained(
@@ -111,8 +112,32 @@ async def lifespan(app: FastAPI):
         ).to(device).eval()
         florence_processor = AutoProcessor.from_pretrained(florence_model_id, trust_remote_code=True)
         logger.info("Florence-2 model loaded successfully")
+        return florence_model, florence_processor
 
-        # Load Qwen2-VL for high-quality vision reasoning
+def load_summarizer_model():
+    """Load Qwen2.5-0.5B-Instruct summarizer on demand"""
+    global summarizer_model, summarizer_tokenizer
+    with _summarizer_lock:
+        if summarizer_model is not None:
+            return summarizer_model, summarizer_tokenizer
+        logger.info("Loading Qwen2.5-0.5B-Instruct...")
+        summarizer_model_id = 'Qwen/Qwen2.5-0.5B-Instruct'
+        summarizer_tokenizer = AutoTokenizer.from_pretrained(summarizer_model_id)
+        summarizer_model = AutoModelForCausalLM.from_pretrained(
+            summarizer_model_id,
+            trust_remote_code=True,
+            dtype=torch.float16,
+            device_map="auto"
+        )
+        logger.info("Qwen2.5-0.5B-Instruct loaded successfully")
+        return summarizer_model, summarizer_tokenizer
+
+def load_vision_model():
+    """Load Qwen2-VL vision model on demand"""
+    global vision_model_obj, vision_processor_obj
+    with _vision_lock:
+        if vision_model_obj is not None:
+            return vision_model_obj, vision_processor_obj
         logger.info(f"Loading {GLM_LOCAL_MODEL_ID}...")
         vision_processor_obj = AutoProcessor.from_pretrained(GLM_LOCAL_MODEL_ID, trust_remote_code=True)
         vision_model_obj = Qwen2VLForConditionalGeneration.from_pretrained(
@@ -122,32 +147,30 @@ async def lifespan(app: FastAPI):
             device_map="auto"
         ).eval()
         logger.info("Qwen2-VL loaded successfully")
+        return vision_model_obj, vision_processor_obj
 
-        # Start idle shutdown task: exit after IDLE_SHUTDOWN_MINUTES with no requests (frees GPU/RAM)
-        global _last_activity
-        _last_activity = time.time()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup - models will be loaded on demand
+    logger.info("Server starting - models will be loaded on demand")
+    
+    # Start idle shutdown task: exit after IDLE_SHUTDOWN_MINUTES with no requests (frees GPU/RAM)
+    global _last_activity
+    _last_activity = time.time()
 
-        async def idle_shutdown_loop():
-            while True:
-                await asyncio.sleep(60)  # check every minute
-                if _last_activity is None:
-                    continue
-                idle_sec = time.time() - _last_activity
-                if idle_sec >= IDLE_SHUTDOWN_MINUTES * 60:
-                    logger.info("Idle for %s min — shutting down to free memory. Run launcher and scan again to restart.", IDLE_SHUTDOWN_MINUTES)
-                    sys.exit(0)
+    async def idle_shutdown_loop():
+        while True:
+            await asyncio.sleep(60)  # check every minute
+            if _last_activity is None:
+                continue
+            idle_sec = time.time() - _last_activity
+            if idle_sec >= IDLE_SHUTDOWN_MINUTES * 60:
+                logger.info("Idle for %s min — shutting down to free memory. Run launcher and scan again to restart.", IDLE_SHUTDOWN_MINUTES)
+                sys.exit(0)
 
-        asyncio.create_task(idle_shutdown_loop())
-        
-        yield
-    except Exception as e:
-        logger.error(f"Failed to load models: {e}")
-        # If Qwen fails, we can still run YOLO and Florence
-        if yolo_model and florence_model:
-            logger.warning("Continuing without summarization model")
-            yield
-        else:
-            raise
+    asyncio.create_task(idle_shutdown_loop())
+    
+    yield
     # Shutdown
     logger.info("Shutting down Ultralytics server")
 
@@ -182,25 +205,21 @@ async def root():
 @app.get("/api/status")
 async def get_status():
     """Get API status and model information"""
-    global yolo_model, florence_model
-    if yolo_model is None:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "error", "message": "Model not loaded"}
-        )
-
+    global yolo_model, florence_model, summarizer_model, vision_model_obj
+    
     return {
         "status": "ready",
         "models": {
             "yolo": current_model_config['name'],
             "yolo_type": current_model_type,
-            "vlm": "Florence-2-large",
-            "vision_glm": "Qwen2-VL-2B-Instruct (Local)",
+            "vlm": "Florence-2-large" if florence_model else "not_loaded",
+            "vision_glm": "Qwen2-VL-2B-Instruct (Local)" if vision_model_obj else "not_loaded",
             "samsung_trm": "wtfmahe/Samsung-TRM (reasoning)",
-            "summarizer": "Qwen2.5-0.5B-Instruct" if summarizer_model else "none"
+            "summarizer": "Qwen2.5-0.5B-Instruct" if summarizer_model else "not_loaded"
         },
         "device": device,
-        "message": f"AI Scanner Ready: {current_model_config['name']}, Florence-2, GLM-Edge-V and TRM Reasoning Core"
+        "message": f"AI Scanner Ready (Lazy Loading): Models will load on demand",
+        "lazy_loading": True
     }
 
 @app.get("/api/config/objects")
@@ -342,9 +361,9 @@ async def detect_objects(file: UploadFile = File(...)):
     - Includes segmentation masks if using segmentation model
     """
     global yolo_model
-
-    if yolo_model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    
+    # Lazy load YOLO model
+    yolo_model = load_yolo_model()
 
     try:
         # Read and validate image
@@ -431,9 +450,9 @@ async def detect_objects_base64(request: Dict[str, Any]):
     - Includes segmentation masks if using segmentation model
     """
     global yolo_model
-
-    if yolo_model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    
+    # Lazy load YOLO model
+    yolo_model = load_yolo_model()
 
     try:
         # Get base64 image data
@@ -505,9 +524,9 @@ async def detect_objects_url(request: Dict[str, Any]):
     - Includes segmentation masks if using segmentation model
     """
     global yolo_model
-
-    if yolo_model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    
+    # Lazy load YOLO model
+    yolo_model = load_yolo_model()
 
     try:
         # Get image URL
@@ -558,8 +577,12 @@ async def analyze_box(request: Dict[str, Any]):
     """
     global florence_model, florence_processor
     
-    if florence_model is None:
-        raise HTTPException(status_code=503, detail="VLM not loaded")
+    # Lazy load Florence model if needed
+    vision_model = request.get("vision_model", "florence2")
+    if vision_model in ["florence2", "samsung-trm"]:
+        florence_model, florence_processor = load_florence_model()
+    elif vision_model in ["glm4.6v"]:
+        vision_model_obj, vision_processor_obj = load_vision_model()
 
     try:
         image_data = request.get("image")
@@ -640,11 +663,24 @@ async def analyze_box(request: Dict[str, Any]):
 async def summarize_text(request: Dict[str, Any]):
     """
     Summarize text using streaming support
+    Supports both integrated Qwen2.5-0.5B-Instruct and LM Studio models
     """
     global summarizer_model, summarizer_tokenizer, current_summarize_id
     
-    if summarizer_model is None:
-        raise HTTPException(status_code=503, detail="Summarization model not loaded")
+    # Get model selection
+    model_provider = request.get("model_provider", "integrated")  # "integrated" or "lm_studio"
+    lm_studio_model = request.get("lm_studio_model", None)
+    lm_studio_url = request.get("lm_studio_url", "http://localhost:1234")
+    
+    # If using integrated model, lazy load it
+    if model_provider == "integrated":
+        summarizer_model, summarizer_tokenizer = load_summarizer_model()
+    elif model_provider == "lm_studio":
+        if not lm_studio_model:
+            raise HTTPException(status_code=400, detail="LM Studio model name required")
+        # Don't load integrated model when using LM Studio
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid model_provider: {model_provider}")
 
     try:
         text = request.get("text")
@@ -663,6 +699,7 @@ async def summarize_text(request: Dict[str, Any]):
         category = request.get("category", "Misc")
         obj_type = request.get("type")
         very_simple_summary = request.get("verySimpleSummary", False)
+        summary_detail_level = request.get("summaryDetailLevel", "normal") # 'very_simple', 'normal', 'slightly_longer'
         
         # Base system prompt for Text Summarization - Neutral and performance-oriented
         system_prompt = request.get("system_prompt") or (
@@ -695,7 +732,7 @@ async def summarize_text(request: Dict[str, Any]):
                 "TASK: Perform high-certainty identification. Output ONLY the identification data. "
                 "Maximum 20 words."
             )
-        elif very_simple_summary:
+        elif very_simple_summary or summary_detail_level == "very_simple":
             # Very simple summary mode - ultra-condensed
             query = (
                 "TASK: Create an extremely simple summary. Use simple words and short sentences. (can be grammatically incorrect just to save tokens)"
@@ -703,24 +740,147 @@ async def summarize_text(request: Dict[str, Any]):
                 "EXAMPLES:\n"
                 "Input: 'Indonesia has conditionally lifted its ban on xAI's Grok chatbot following similar moves by Malaysia and the Philippines.'\n"
                 "Output: 'Indonesia unbans Grok.'\n\n"
-                "Input: 'India simultaneously announced sweeping tax incentives through 2047 to attract global AI workloads.'\n"
-                "Output: 'India lowers tax for AI.'\n\n"
-                "Input: 'Elon Musk's reported consolidation of Tesla, SpaceX, and xAI marks a return to large-scale corporate conglomerates.'\n"
-                "Output: 'Elon to merge companies.'\n\n"
-                "Now summarize this text: \n\n"
-                f"TEXT: {text}\n\n"
+                f"SOURCE TEXT: {text}\n\n"
             )
-        else:
-            # Standard website text summarization
+        elif summary_detail_level == "slightly_longer":
+            # Slightly longer summary mode - more detail than normal
             query = (
                 "TASK: Translate to English then summarize the text with the following structure:\n"
                 "1. Start with 1 to 5 emojis max which represent the sentiment of the text (no words allowed in first section only emojis).\n"
                 "2. Next add a new line with separator '------'.\n"
-                "3. Finally write the 30-100 word summary about the SOURCE TEXT.\n"
+                "3. Finally write the 100-300 word summary about the SOURCE TEXT.\n"
+                f"SOURCE TEXT: {text}\n\n"
+            )
+        else:
+            # Normal summarization mode with emojis
+            query = (
+                "TASK: Translate to English then summarize the text with the following structure:\n"
+                "1. Start with 1 to 5 emojis max which represent the sentiment of the text (no words allowed in first section only emojis).\n"
+                "2. Next add a new line with separator '------'.\n"
+                "3. Finally write the 50-100 word summary about the SOURCE TEXT.\n"
                 f"SOURCE TEXT: {text}\n\n"
             )
 
-        # Use chat template for robust prompting
+        # Handle different model providers
+        if model_provider == "lm_studio":
+            # Use LM Studio API
+            if stream:
+                # Streaming response for LM Studio
+                async def lm_studio_stream_generator():
+                    try:
+                        lm_studio_endpoint = f"{lm_studio_url}/api/v1/chat"
+                        lm_studio_payload = {
+                            "model": lm_studio_model,
+                            "system_prompt": system_prompt,
+                            "input": query
+                        }
+                        
+                        logger.info(f"Calling LM Studio streaming at {lm_studio_endpoint} with model {lm_studio_model}")
+                        
+                        # LM Studio doesn't have a native streaming endpoint, so we'll make a regular request
+                        # and stream the response word by word
+                        lm_response = requests.post(lm_studio_endpoint, json=lm_studio_payload, timeout=30)
+                        lm_response.raise_for_status()
+                        
+                        lm_data = lm_response.json()
+                        
+                        # Extract the summary from LM Studio response
+                        output = lm_data.get("output", [])
+                        if isinstance(output, list):
+                            message_contents = [item.get("content", "") for item in output if item.get("type") == "message"]
+                            full_summary = "".join(message_contents) if message_contents else ""
+                        elif isinstance(output, str):
+                            full_summary = output
+                        else:
+                            full_summary = lm_data.get("response", lm_data.get("text", lm_data.get("content", "")))
+                        
+                        if not full_summary:
+                            yield f"data: {json.dumps({'error': 'LM Studio returned empty response'})}\n\n"
+                            return
+                        
+                        # Stream word by word
+                        words = full_summary.strip().split()
+                        current_text = ""
+                        for i, word in enumerate(words):
+                            current_text += word + " "
+                            chunk_data = {
+                                'text': current_text.strip(),
+                                'finished': i == len(words) - 1,
+                                'model': lm_studio_model
+                            }
+                            yield f"data: {json.dumps(chunk_data)}\n\n"
+                            await asyncio.sleep(0.02)
+                        
+                    except requests.exceptions.RequestException as e:
+                        logger.error(f"LM Studio streaming failed: {e}")
+                        yield f"data: {json.dumps({'error': f'LM Studio connection failed: {str(e)}'})}\n\n"
+                
+                return StreamingResponse(
+                    lm_studio_stream_generator(),
+                    media_type="text/plain",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*",
+                    }
+                )
+            else:
+                # Non-streaming response for LM Studio
+                try:
+                    lm_studio_endpoint = f"{lm_studio_url}/api/v1/chat"
+                    lm_studio_payload = {
+                        "model": lm_studio_model,
+                        "system_prompt": system_prompt,
+                        "input": query
+                    }
+                    
+                    logger.info(f"Calling LM Studio at {lm_studio_endpoint} with model {lm_studio_model}")
+                    logger.info(f"Payload: {lm_studio_payload}")
+                    
+                    lm_response = requests.post(lm_studio_endpoint, json=lm_studio_payload, timeout=30)
+                    logger.info(f"LM Studio response status: {lm_response.status_code}")
+                    lm_response.raise_for_status()
+                    
+                    lm_data = lm_response.json()
+                    logger.info(f"LM Studio response data: {lm_data}")
+                    
+                    # LM Studio returns response in various possible formats
+                    # Format 1: Array of objects with type and content fields
+                    output = lm_data.get("output", [])
+                    logger.info(f"Output type: {type(output)}, Output: {output}")
+                    
+                    if isinstance(output, list):
+                        # Extract content from message type objects
+                        message_contents = [item.get("content", "") for item in output if item.get("type") == "message"]
+                        logger.info(f"Message contents: {message_contents}")
+                        summary = "".join(message_contents) if message_contents else ""
+                        logger.info(f"Extracted summary from list: '{summary}'")
+                    elif isinstance(output, str):
+                        summary = output
+                        logger.info(f"Extracted summary from string: '{summary}'")
+                    else:
+                        # Try other possible fields
+                        summary = lm_data.get("response", lm_data.get("text", lm_data.get("content", "")))
+                        logger.info(f"Extracted summary from fallback: '{summary}'")
+                    
+                    if not summary:
+                        logger.error(f"LM Studio returned empty response. Full data: {lm_data}")
+                        raise HTTPException(status_code=500, detail="LM Studio returned empty response")
+                    
+                    logger.info(f"LM Studio summarization completed, summary length: {len(summary)}")
+                    return {"summary": summary.strip(), "model": lm_studio_model}
+                    
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"LM Studio API call failed: {e}")
+                    response_text = lm_response.text if 'lm_response' in locals() else 'N/A'
+                    logger.error(f"Response text: {response_text}")
+                    error_detail = f"LM Studio connection failed: {str(e)}"
+                    if 'lm_response' in locals():
+                        error_detail += f" | Status: {lm_response.status_code} | Response: {response_text[:200]}"
+                    raise HTTPException(status_code=503, detail=error_detail)
+        
+        # Use chat template for robust prompting (integrated model)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": query}
@@ -773,7 +933,7 @@ async def summarize_text(request: Dict[str, Any]):
                         chunk_data = {
                             'text': current_text.strip(),
                             'finished': i == len(words) - 1,
-                            'model': 'Qwen2.5'
+                            'model': 'Qwen2.5-0.5B-Instruct'
                         }
                         yield f"data: {json.dumps(chunk_data)}\n\n"
                         # Small delay to simulate streaming effect
@@ -821,7 +981,7 @@ async def summarize_text(request: Dict[str, Any]):
                     
                 summary = summarizer_tokenizer.decode(output_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
                 logger.info(f"Summarization completed, summary length: {len(summary)}")
-                return {"summary": summary.strip(), "model": "Qwen2.5"}
+                return {"summary": summary.strip(), "model": "Qwen2.5-0.5B-Instruct"}
             except torch.cuda.OutOfMemoryError as e:
                 logger.error(f"CUDA out of memory during summarization: {e}")
                 # Clear CUDA cache and retry with shorter text
@@ -896,6 +1056,61 @@ def get_available_models():
         "vlm_model": "Florence-2-large",
         "reasoning_model": "Samsung-TRM",
         "note": "Use /api/models/switch to change models dynamically"
+    }
+
+@app.get("/api/lm-studio/models")
+async def get_lm_studio_models():
+    """Get available models from LM Studio"""
+    lm_studio_url = "http://localhost:1234"
+    
+    # Try multiple common endpoints for listing models
+    endpoints_to_try = [
+        "/api/v1/models",
+        "/v1/models",
+        "/api/models"
+    ]
+    
+    for endpoint in endpoints_to_try:
+        try:
+            response = requests.get(f"{lm_studio_url}{endpoint}", timeout=5)
+            if response.ok:
+                data = response.json()
+                models = data.get("data", [])
+                
+                # Extract model names
+                model_names = [model.get("id", model.get("name", "")) for model in models]
+                model_names = [name for name in model_names if name]  # Filter out empty names
+                
+                if model_names:
+                    logger.info(f"Found {len(model_names)} models from LM Studio at {endpoint}")
+                    return {
+                        "status": "connected",
+                        "models": model_names,
+                        "url": lm_studio_url
+                    }
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"Failed to connect to LM Studio at {endpoint}: {e}")
+            continue
+    
+    # If all endpoints failed, try to test connection with a simple request
+    try:
+        response = requests.get(f"{lm_studio_url}/", timeout=2)
+        if response.ok:
+            logger.warning("LM Studio is running but model listing endpoint not found. User will need to enter model name manually.")
+            return {
+                "status": "connected_no_list",
+                "models": [],
+                "url": lm_studio_url,
+                "message": "LM Studio is running but doesn't support model listing. Enter model name manually."
+            }
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to connect to LM Studio: {e}")
+    
+    return {
+        "status": "disconnected",
+        "models": [],
+        "url": lm_studio_url,
+        "error": "Could not connect to LM Studio or list models"
     }
 
 def process_mask_data(masks, i, x1, y1, x2, y2, img_width, img_height):
@@ -992,7 +1207,17 @@ def process_mask_data(masks, i, x1, y1, x2, y2, img_width, img_height):
 
 async def process_detections(image, results, deep_analysis=False, vision_model="florence2"):
     """Helper to process YOLO results and optionally run Florence-2 analysis"""
+    global florence_model, florence_processor, vision_model_obj, vision_processor_obj
+    
     logger.info(f"process_detections called with deep_analysis={deep_analysis}")
+    
+    # Lazy load vision model if needed for deep analysis
+    if deep_analysis:
+        if vision_model in ["florence2", "samsung-trm"]:
+            florence_model, florence_processor = load_florence_model()
+        elif vision_model in ["glm4.6v"]:
+            vision_model_obj, vision_processor_obj = load_vision_model()
+    
     detections = []
     img_height, img_width = np.array(image).shape[:2]
     is_segmentation = current_model_type == "segmentation"

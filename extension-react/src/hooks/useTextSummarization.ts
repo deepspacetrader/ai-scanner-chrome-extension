@@ -97,12 +97,16 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
         setError('')
         setStreamingText('')
 
-        // Use streaming if enabled, otherwise fall back to regular summarization
-        if (settings.stream) {
+        // Use streaming if enabled
+        const useStreaming = settings.stream
+        console.log('useTextSummarization: Starting summarization, stream:', settings.stream, 'model_provider:', settings.model_provider, 'useStreaming:', useStreaming)
+        if (useStreaming) {
+            let finished = false
             textSummarizer.streamSummarize(truncated, settings, (chunk: StreamingSummaryResult) => {
-                if (currentKeyRef.current === key) {
+                if (currentKeyRef.current === key && !finished) {
                     setStreamingText(chunk.text)
                     if (chunk.finished) {
+                        finished = true
                         setStreamingText('')
                         setSummaryResult({
                             summary: chunk.text,
@@ -131,8 +135,10 @@ export function useTextSummarization(isActive: boolean, settings: SummarySetting
                 }
             })
         } else {
+            console.log('useTextSummarization: Calling non-streaming summarize')
             textSummarizer.summarize(truncated, settings)
                 .then((result) => {
+                    console.log('useTextSummarization: Summarize result:', result)
                     if (currentKeyRef.current === key) {
                         setSummaryResult(result)
                         setError('')
