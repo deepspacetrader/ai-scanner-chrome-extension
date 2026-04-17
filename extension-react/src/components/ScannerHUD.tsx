@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Brain, X, Target, Loader2, CheckCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useScanner } from '../hooks/useScanner'
@@ -14,10 +14,112 @@ interface ScannerHUDProps {
     shadowRoot?: ShadowRoot
 }
 
+interface SidebarWithBridgeProps {
+    getSidebarLayout: () => { className: string; style: React.CSSProperties };
+    sidebarRef: React.RefObject<HTMLDivElement | null>;
+    setIsHoveringSidebar: (value: boolean) => void;
+    analyzableDetections: any[];
+}
+
+const SidebarWithBridge: React.FC<SidebarWithBridgeProps> = ({
+    getSidebarLayout,
+    sidebarRef,
+    setIsHoveringSidebar,
+    analyzableDetections
+}) => {
+    const layout = getSidebarLayout();
+    const bridgeWidth = 12;
+    const isOnRight = !layout.className.includes('right-full');
+
+    return (
+        <div
+            className="absolute top-0 h-full pointer-events-auto"
+            style={{
+                left: isOnRight ? '100%' : undefined,
+                right: isOnRight ? undefined : '100%',
+                width: `calc(${bridgeWidth}px + ${layout.style?.width || '320px'})`,
+                zIndex: 99999,
+            }}
+            onMouseEnter={() => setIsHoveringSidebar(true)}
+            onMouseLeave={() => setIsHoveringSidebar(false)}
+        >
+            {/* Visible bridge (red) to maintain hover across the gap */}
+            <div
+                className="absolute top-0 h-full"
+                style={{
+                    left: 0,
+                    width: `${bridgeWidth}px`
+                }}
+            />
+            <div
+                ref={sidebarRef}
+                className={`absolute flex flex-col gap-2 ${layout.className}`}
+                style={{
+                    ...layout.style,
+                    left: isOnRight ? `${bridgeWidth}px` : undefined,
+                    right: isOnRight ? undefined : `${bridgeWidth}px`,
+                }}
+            >
+                <AnimatePresence mode="popLayout">
+                    {analyzableDetections.map((det, idx) => (
+                        <motion.div
+                            key={`label-${det.type}-${det.x}-${det.y}`}
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: 20 }}
+                            transition={{ duration: 0.3, delay: idx * 0.05 }}
+                            className="relative flex flex-col gap-1 p-3 transform"
+                            style={{
+                                backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                                color: det.color || '#22d3ee',
+                                border: `1px solid ${det.color || '#22d3ee'}44`,
+                                borderLeft: `4px solid ${det.color || '#22d3ee'}`,
+                                backdropFilter: 'blur(8px)',
+                                boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
+                                minHeight: '100px',
+                                maxHeight: '400px'
+                            }}
+                        >
+                            <div className="flex items-center justify-between border-b border-white/10 pb-1 mb-1 text-[10px] uppercase font-bold tracking-tighter">
+                                <div className="flex items-center gap-2">
+                                    <Brain className="w-3 h-3" />
+                                    <span>{det.type} IDENTITY</span>
+                                </div>
+                                <span className="opacity-60">CONF: {(det.confidence * 100).toFixed(0)}%</span>
+                            </div>
+                            <div className="normal-case italic text-cyan-50 text-[12px] leading-relaxed max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-cyan-500/50 pr-2">
+                                {det.analysis === '...' ? (
+                                    <div className="flex flex-col items-center justify-center gap-3 py-4 min-h-[60px]">
+                                        <Loader2 className="w-6 h-6 animate-spin text-yellow-400" />
+                                        <span className="text-[10px] uppercase tracking-widest text-yellow-400/80 animate-pulse">
+                                            ANALYZING...
+                                        </span>
+                                        <div className="h-1 w-16 bg-white/10 rounded-full overflow-hidden">
+                                            <div className="h-full bg-yellow-400 animate-[loading_1.5s_ease-in-out_infinite]" 
+                                                 style={{width: '50%'}} />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="animate-in fade-in slide-in-from-top-1 duration-500 whitespace-pre-wrap">
+                                        {det.analysis}
+                                    </div>
+                                )}
+                            </div>
+                        </motion.div>
+                    ))}
+                </AnimatePresence>
+            </div>
+        </div>
+    );
+};
+
 const ScannerHUD: React.FC<ScannerHUDProps> = () => {
     const [isActive, setIsActive] = useState(false)
     const [isMouseDown, setIsMouseDown] = useState(false)
     const [isHoveringText, setIsHoveringText] = useState(false)
+    const [isHoveringSidebar, setIsHoveringSidebar] = useState(false)  // Track sidebar hover for scrolling
+    const [lockedElement, setLockedElement] = useState<HTMLImageElement | HTMLVideoElement | null>(null)  // Locked element for sticky mode
+    const sidebarRef = useRef<HTMLDivElement>(null)  // Ref for sidebar element
     const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
     const summarySettings: SummarySettings = {
         endpoint: settings.detectionEndpoint.replace('/api/detect-base64', '/api/summarize'),
@@ -43,13 +145,15 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
         mousePos
     } = useScanner(
         isActive,
+        isHoveringSidebar || !!lockedElement,  // Pass sidebar hover state (or locked state)
         settings.saveScannedImages,
         settings.enableDeepAnalysis,
         settings.enableEnhancedDescription,
         settings.deepAnalysisThreshold,
         settings.categoryThresholds,
         summarySettings,
-        settings.visionModel
+        settings.visionModel,
+        settings.lmStudioUrl
     )
 
     // Scanner for videos
@@ -60,17 +164,22 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
         mousePos: videoMousePos
     } = useVideoScanner(
         isActive,
+        isHoveringSidebar || !!lockedElement,  // Pass sidebar hover state (or locked state)
         settings.saveScannedImages,
         settings.enableDeepAnalysis,
         settings.enableEnhancedDescription,
         settings.deepAnalysisThreshold,
         settings.categoryThresholds,
         summarySettings,
-        settings.visionModel
+        settings.visionModel,
+        settings.lmStudioUrl
     );
 
-    const hoveredImage = imageHoveredElement instanceof HTMLImageElement ? imageHoveredElement : null;
-    const hoveredElement = hoveredImage || hoveredVideo;
+    // Determine effective element (locked takes precedence)
+    const effectiveImageElement = lockedElement || imageHoveredElement;
+    const hoveredImage = effectiveImageElement instanceof HTMLImageElement ? effectiveImageElement : null;
+    const hoveredElement = hoveredImage || hoveredVideo || lockedElement;
+    const isLocked = !!lockedElement;
     const detectionResult = hoveredImage ? imageDetectionResult : videoDetectionResult;
     const isScanning = isImageScanning || isVideoScanning;
     const activeMousePos = hoveredImage ? mousePos : videoMousePos;
@@ -97,6 +206,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
     }, [detectionResult, settings.enableSound, settings.soundVolume])
 
     const getSystemStatus = () => {
+        if (isLocked) return 'LOCKED';
         if (isScanning) return 'SCANNING';
         if (detectionResult) {
             const isProcessingFlorence = detectionResult.data.some(d => d.analysis === '...');
@@ -115,7 +225,7 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
     const systemStatus = getSystemStatus()
 
     const getSidebarLayout = useCallback(() => {
-        if (!hoveredElement) return { className: 'left-full top-0 ml-12', style: {} };
+        if (!hoveredElement) return { className: 'left-full top-0', style: {} };
 
         const rect = hoveredElement.getBoundingClientRect();
         const sidebarWidth = 320;
@@ -130,20 +240,20 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
             const spaceLeft = rect.left;
 
             if (spaceRight >= sidebarWidth + margin) {
-                return { className: 'left-full top-0 ml-8', style: { width: `${sidebarWidth}px` } };
+                return { className: 'left-full top-0', style: { width: `${sidebarWidth}px` } };
             } else if (spaceLeft >= sidebarWidth + margin) {
-                return { className: 'right-full top-0 mr-8', style: { width: `${sidebarWidth}px` } };
+                return { className: 'right-full top-0', style: { width: `${sidebarWidth}px` } };
             } else {
                 // Position underneath if no room on sides or if extremely wide
                 return {
-                    className: 'top-full left-1/2 -translate-x-1/2 mt-8',
+                    className: 'top-full left-1/2 -translate-x-1/2',
                     style: { width: `min(94vw, 600px)`, maxWidth: '800px' }
                 };
             }
         }
 
         // Default behavior for small/medium YOLO objects
-        return { className: 'left-full top-0 ml-12', style: { width: `${sidebarWidth}px` } };
+        return { className: 'left-full top-0', style: { width: `${sidebarWidth}px` } };
     }, [hoveredElement, detectionResult]);
 
     // Load settings from chrome storage and listen for changes
@@ -182,9 +292,20 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
 
     // Use ref to avoid stale closure issues in event handlers
     const settingsRef = React.useRef(settings)
+    const lockedElementRef = React.useRef(lockedElement)
+    const hoveredElementRef = React.useRef(hoveredElement)
+
     React.useEffect(() => {
         settingsRef.current = settings
     }, [settings])
+
+    React.useEffect(() => {
+        lockedElementRef.current = lockedElement
+    }, [lockedElement])
+
+    React.useEffect(() => {
+        hoveredElementRef.current = hoveredElement
+    }, [hoveredElement])
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -205,6 +326,22 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
 
             if (e.key === 'Escape') {
                 setIsActive(false)
+            }
+
+            // CTRL key toggles sticky lock on current element
+            if (e.key === 'Control' && !e.repeat) {
+                const currentHovered = hoveredElementRef.current;
+                const currentLocked = lockedElementRef.current;
+
+                if (currentLocked) {
+                    // If already locked, unlock it
+                    setLockedElement(null);
+                } else if (currentHovered) {
+                    // If hovering an element, lock it
+                    setLockedElement(currentHovered as HTMLImageElement | HTMLVideoElement);
+                }
+                e.preventDefault();
+                e.stopPropagation();
             }
         }
 
@@ -308,6 +445,13 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                     <div className="flex items-center gap-2 text-green-400">
                         <CheckCircle className="w-3 h-3" />
                         <span>DONE</span>
+                    </div>
+                );
+            case 'LOCKED':
+                return (
+                    <div className="flex items-center gap-2 text-purple-400">
+                        <div className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+                        <span>LOCKED</span>
                     </div>
                 );
             default:
@@ -515,9 +659,9 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                         {hoveredImage && (() => {
                             if (!detectionResult?.data) return null;
 
-                            // TEMP: Show all detections to test - remove filtering
+                            // Show detections with analysis or those pending analysis (loading)
                             const analyzableDetections = detectionResult.data
-                                .filter(d => d.analysis && d.analysis.trim() !== '' && d.analysis !== '...')
+                                .filter(d => (d.analysis && d.analysis.trim() !== '' && d.analysis !== '...') || (d as any).analysis_pending || d.analysis === '...')
                                 .sort((a, b) => a.y - b.y);
                             
                             // Debug: Log what detections have analysis
@@ -587,73 +731,21 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                             })}
                                         </AnimatePresence>
                                     </svg>
-
-                                    {(() => {
-                                        const layout = getSidebarLayout();
-                                        return (
-                                            <div
-                                                className={`absolute flex flex-col gap-6 pointer-events-auto ${layout.className}`}
-                                                style={layout.style}
-                                            >
-                                                <AnimatePresence mode="popLayout">
-                                                    {analyzableDetections.map((det, idx) => (
-                                                        <motion.div
-                                                            key={`label-${det.type}-${det.x}-${det.y}`}
-                                                            initial={{ opacity: 0, x: 20 }}
-                                                            animate={{ opacity: 1, x: 0 }}
-                                                            exit={{ opacity: 0, x: 20 }}
-                                                            transition={{ duration: 0.3, delay: idx * 0.05 }}
-                                                            className="relative flex flex-col gap-1 p-3 transform"
-                                                            style={{
-                                                                backgroundColor: 'rgba(0, 0, 0, 0.85)',
-                                                                color: det.color || '#22d3ee',
-                                                                border: `1px solid ${det.color || '#22d3ee'}44`,
-                                                                borderLeft: `4px solid ${det.color || '#22d3ee'}`,
-                                                                backdropFilter: 'blur(8px)',
-                                                                boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
-                                                                minHeight: '100px',
-                                                                maxHeight: '400px'
-                                                            }}
-                                                        >
-                                                            <div className="flex items-center justify-between border-b border-white/10 pb-1 mb-1 text-[10px] uppercase font-bold tracking-tighter">
-                                                                <div className="flex items-center gap-2">
-                                                                    <Brain className="w-3 h-3" />
-                                                                    <span>{det.type} IDENTITY</span>
-                                                                </div>
-                                                                <span className="opacity-60">CONF: {(det.confidence * 100).toFixed(0)}%</span>
-                                                            </div>
-
-                                                            <div className="normal-case italic text-cyan-50 text-[12px] leading-relaxed max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-cyan-500/50 pr-2">
-                                                                {det.analysis === '...' ? (
-                                                                    <div className="flex flex-col gap-2 py-1">
-                                                                        <span className="flex items-center gap-2 text-[8px] uppercase tracking-tighter opacity-70">
-                                                                            <span className="w-2 h-2 bg-yellow-400 rounded-full animate-ping-pong" />
-                                                                            ACQUIRING DETAILS...
-                                                                        </span>
-                                                                        <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden relative">
-                                                                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-yellow-400 to-transparent w-2/3 animate-progress-indefinite" />
-                                                                        </div>
-                                                                    </div>
-                                                                ) : (
-                                                                    <div className="animate-in fade-in slide-in-from-top-1 duration-500 whitespace-pre-wrap">
-                                                                        {det.analysis}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </motion.div>
-                                                    ))}
-                                                </AnimatePresence>
-                                            </div>
-                                        );
-                                    })()}
+                                    <SidebarWithBridge
+                                        getSidebarLayout={getSidebarLayout}
+                                        sidebarRef={sidebarRef}
+                                        setIsHoveringSidebar={setIsHoveringSidebar}
+                                        analyzableDetections={analyzableDetections}
+                                    />
                                 </>
-                            );
+                            )
                         })()}
 
-                        {/* On-video analysis sidebar and lines */}
-                        {hoveredVideo && detectionResult?.data && (() => {
+            {/* On-video analysis sidebar and lines */}
+            {hoveredVideo && detectionResult?.data && (() => {
+                            // Show detections with analysis or those pending analysis (loading)
                             const analyzableDetections = detectionResult.data
-                                .filter(d => d.analysis && d.analysis.trim() !== '' && d.analysis !== '...')
+                                .filter(d => (d.analysis && d.analysis.trim() !== '' && d.analysis !== '...') || (d as any).analysis_pending || d.analysis === '...')
                                 .sort((a, b) => a.y - b.y);
                             
                             // Debug: Log what video detections have analysis
@@ -725,11 +817,39 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
 
                                     {(() => {
                                         const layout = getSidebarLayout();
+                                        const bridgeWidth = layout.className.includes('ml-12') ? 96 : layout.className.includes('ml-8') ? 64 : 48;
+                                        const isOnRight = !layout.className.includes('right-full');
                                         return (
                                             <div
-                                                className={`absolute flex flex-col gap-6 pointer-events-auto ${layout.className}`}
-                                                style={layout.style}
+                                                className="absolute top-0 h-full pointer-events-auto"
+                                                style={{
+                                                    left: isOnRight ? '100%' : undefined,
+                                                    right: isOnRight ? undefined : '100%',
+                                                    width: `calc(${bridgeWidth}px + ${layout.style?.width || '320px'})`,
+                                                    zIndex: 99998,
+                                                }}
+                                                onMouseEnter={() => setIsHoveringSidebar(true)}
+                                                onMouseLeave={() => setIsHoveringSidebar(false)}
                                             >
+                                                {/* Visible bridge (red) to maintain hover across the gap */}
+                                                <div
+                                                    className="absolute top-0 h-full"
+                                                    style={{
+                                                        left: 0,
+                                                        width: `${bridgeWidth}px`,
+                                                        backgroundColor: 'rgba(255, 0, 0, 0.5)',
+                                                        border: '2px solid red',
+                                                    }}
+                                                />
+                                                <div
+                                                    ref={sidebarRef}
+                                                    className={`absolute flex flex-col gap-6 ${layout.className}`}
+                                                    style={{
+                                                        ...layout.style,
+                                                        left: isOnRight ? `${bridgeWidth}px` : undefined,
+                                                        right: isOnRight ? undefined : `${bridgeWidth}px`,
+                                                    }}
+                                                >
                                                 <AnimatePresence mode="popLayout">
                                                     {analyzableDetections.map((det, idx) => (
                                                         <motion.div
@@ -760,13 +880,14 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
 
                                                             <div className="normal-case italic text-cyan-50 text-[12px] leading-relaxed max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-cyan-500/50 pr-2">
                                                                 {det.analysis === '...' ? (
-                                                                    <div className="flex flex-col gap-2 py-1">
-                                                                        <span className="flex items-center gap-2 text-[8px] uppercase tracking-tighter opacity-70">
-                                                                            <span className="w-2 h-2 bg-yellow-400 rounded-full animate-ping-pong" />
+                                                                    <div className="flex flex-col items-center justify-center gap-3 py-4 min-h-[60px]">
+                                                                        <Loader2 className="w-6 h-6 animate-spin text-yellow-400" />
+                                                                        <span className="text-[10px] uppercase tracking-widest text-yellow-400/80 animate-pulse">
                                                                             ANALYZING...
                                                                         </span>
-                                                                        <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden relative">
-                                                                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-yellow-400 to-transparent w-2/3 animate-progress-indefinite" />
+                                                                        <div className="h-1 w-16 bg-white/10 rounded-full overflow-hidden">
+                                                                            <div className="h-full bg-yellow-400 animate-[loading_1.5s_ease-in-out_infinite]" 
+                                                                                 style={{width: '50%'}} />
                                                                         </div>
                                                                     </div>
                                                                 ) : (
@@ -779,10 +900,10 @@ const ScannerHUD: React.FC<ScannerHUDProps> = () => {
                                                     ))}
                                                 </AnimatePresence>
                                             </div>
-                                        );
-                                    })()}
+                                        </div>
+                                    )})()}
                                 </>
-                            );
+                            )
                         })()}
                     </div>
                 )

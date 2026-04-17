@@ -36,6 +36,13 @@ function App() {
           if (!mergedSettings.lmStudioUrl) {
             mergedSettings.lmStudioUrl = DEFAULT_SETTINGS.lmStudioUrl;
           }
+          // Migrate vision model provider if not present
+          if (!mergedSettings.visionModelProvider) {
+            mergedSettings.visionModelProvider = DEFAULT_SETTINGS.visionModelProvider;
+          }
+          if (!mergedSettings.lmStudioVisionModel) {
+            mergedSettings.lmStudioVisionModel = DEFAULT_SETTINGS.lmStudioVisionModel;
+          }
           // Migrate verySimpleSummary to summaryDetailLevel
           const oldResult = result as any;
           if (oldResult.verySimpleSummary !== undefined) {
@@ -343,24 +350,51 @@ function App() {
               <div className="theme-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: '10px' }}>
                 <div
                   className={`theme-option ${settings.visionModel === 'florence2' ? 'selected' : ''}`}
-                  onClick={() => handleChange('visionModel', 'florence2')}
+                  onClick={() => {
+                    handleChange('visionModel', 'florence2');
+                    if (chrome?.storage?.sync) {
+                      chrome.storage.sync.set({ ...settings, visionModel: 'florence2' });
+                    }
+                  }}
                   style={{ fontSize: '11px' }}
                 >
                   Florence-2 (Fast)
                 </div>
                 <div
                   className={`theme-option ${settings.visionModel === 'glm4.6v' ? 'selected' : ''}`}
-                  onClick={() => handleChange('visionModel', 'glm4.6v')}
+                  onClick={() => {
+                    handleChange('visionModel', 'glm4.6v');
+                    if (chrome?.storage?.sync) {
+                      chrome.storage.sync.set({ ...settings, visionModel: 'glm4.6v' });
+                    }
+                  }}
                   style={{ fontSize: '11px' }}
                 >
                   Qwen2-VL (Local)
                 </div>
                 <div
                   className={`theme-option ${settings.visionModel === 'samsung-trm' ? 'selected' : ''}`}
-                  onClick={() => handleChange('visionModel', 'samsung-trm')}
+                  onClick={() => {
+                    handleChange('visionModel', 'samsung-trm');
+                    if (chrome?.storage?.sync) {
+                      chrome.storage.sync.set({ ...settings, visionModel: 'samsung-trm' });
+                    }
+                  }}
                   style={{ fontSize: '11px' }}
                 >
                   Samsung-TRM (Deep)
+                </div>
+                <div
+                  className={`theme-option ${settings.visionModel === 'google/gemma-4-e4b' ? 'selected' : ''}`}
+                  onClick={() => {
+                    handleChange('visionModel', 'google/gemma-4-e4b');
+                    if (chrome?.storage?.sync) {
+                      chrome.storage.sync.set({ ...settings, visionModel: 'google/gemma-4-e4b' });
+                    }
+                  }}
+                  style={{ fontSize: '11px' }}
+                >
+                  Gemma-4-e4b (LM Studio)
                 </div>
               </div>
             </div>

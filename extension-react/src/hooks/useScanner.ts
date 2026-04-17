@@ -4,21 +4,34 @@ import { type SummarySettings, textSummarizer } from '../services/textSummarizer
 
 export function useScanner(
     isActive: boolean,
+    isHoveringSidebar: boolean = false,
     saveScannedImages: boolean = false,
     enableDeepAnalysis: boolean = false,
     enableEnhancedDescription: boolean = true,
     deepAnalysisThreshold: number = 0.85,
     categoryThresholds: Record<string, number> = {},
     summarySettings?: SummarySettings,
-    visionModel: string = 'florence2'
+    visionModel: string = 'florence2',
+    lmStudioUrl: string = 'http://localhost:1234'
 ) {
     const [hoveredElement, setHoveredElement] = useState<HTMLImageElement | HTMLVideoElement | null>(null)
     const [detectionResult, setDetectionResult] = useState<DetectionResult | null>(null)
     const [isScanning, setIsScanning] = useState(false)
-    const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
     const analyzingRef = useRef<Set<string>>(new Set())
+    // Cache for detection results to avoid re-analyzing same element
+    const detectionCacheRef = useRef<Map<string, DetectionResult>>(new Map())
     const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const clearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
+    const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+    // Refs to track current state for cache updates
+    const currentDetectionResultRef = useRef<DetectionResult | null>(null)
+    const currentImageSrcRef = useRef<string>('')
+
+    // Sync detectionResult ref with state
+    useEffect(() => {
+        currentDetectionResultRef.current = detectionResult
+    }, [detectionResult])
 
     const findElementUnderCursor = useCallback((e: MouseEvent) => {
         const elements = document.elementsFromPoint(e.clientX, e.clientY)
@@ -67,15 +80,23 @@ export function useScanner(
     const triggerDeepAnalysis = useCallback(async (result: DetectionResult) => {
         if (!result.image) return
 
+        console.log(`[triggerDeepAnalysis] Checking ${result.data.length} detections for analysis...`)
+        result.data.forEach((d, i) => {
+            console.log(`[triggerDeepAnalysis] Detection ${i}: type=${d.type}, analysis=${d.analysis?.substring(0, 20)}, analysis_pending=${(d as any).analysis_pending}, is_analyzable=${(d as any).is_analyzable}`)
+        })
+        
         const targets = result.data.filter(d => {
             const category = (d as any).category || "Misc"
             const threshold = categoryThresholds[category] ?? deepAnalysisThreshold
             const isAnalyzable = (d as any).is_analyzable
             const isScene = d.type === 'scene'
-            // Only analyze scenes or high-confidence objects
-            return isAnalyzable && (isScene || (d.confidence >= threshold && !d.analysis))
+            const analysisPending = (d as any).analysis_pending
+            const shouldAnalyze = isAnalyzable && (isScene || (d.confidence >= threshold && (analysisPending || !d.analysis)))
+            console.log(`[triggerDeepAnalysis] Filter: type=${d.type}, threshold=${threshold.toFixed(2)}, shouldAnalyze=${shouldAnalyze}`)
+            return shouldAnalyze
         })
 
+        console.log(`[triggerDeepAnalysis] Found ${targets.length} targets for analysis`)
         if (targets.length === 0) return
 
         const analyzeKey = `${result.image.substring(0, 50)}_${targets.length}`
@@ -92,7 +113,7 @@ export function useScanner(
                     const isAnalyzable = (d as any).is_analyzable
                     const isScene = d.type === 'scene'
                     // Only show "..." placeholder for scenes and high-confidence objects that are being analyzed
-                    return (isAnalyzable && (isScene || (d.confidence >= threshold && !d.analysis))) ? { ...d, analysis: '...' } : d
+                    return (isAnalyzable && (isScene || (d.confidence >= threshold && ((d as any).analysis_pending || !d.analysis)))) ? { ...d, analysis: '...' } : d
                 })
             }
         })
@@ -106,17 +127,19 @@ export function useScanner(
                     target.width,
                     target.height,
                     target.type,
-                    visionModel
-                ) as any
+                    visionModel,
+                    visionModel,
+                    lmStudioUrl
+                )
                 if (!visionResult) return
 
-                let finalAnalysis = visionResult.analysis || visionResult
-                let analysisModel = visionResult.model || (visionModel === 'glm4.6v' ? 'Qwen2-VL' : 'Florence-2')
+                let finalAnalysis = visionResult.analysis
+                let analysisModel = visionResult.model || visionModel
 
                 const isAnalyzable = (target as any).is_analyzable
-                if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.startsWith('Error') && summarySettings) {
+                if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.analysis.startsWith('Error') && summarySettings) {
                     try {
-                        const refinedResult = await textSummarizer.summarize(visionResult, {
+                        const refinedResult = await textSummarizer.summarize(visionResult.analysis, {
                             ...summarySettings,
                             mode: 'refine',
                             category: (target as any).category || 'Misc',
@@ -143,13 +166,35 @@ export function useScanner(
                 })
             }))
         } finally {
+            // After all analyses complete, update the cache with the analyzed result
+            setTimeout(() => {
+                const currentSrc = currentImageSrcRef.current
+                const currentResult = currentDetectionResultRef.current
+                if (currentSrc && currentResult && currentResult.data.some(d => d.analysis && d.analysis !== '...')) {
+                    console.log(`[triggerDeepAnalysis] Updating cache with analyzed result`)
+                    imageScanner.updateCachedResult(currentSrc, currentResult)
+                }
+            }, 100)
+            
             setTimeout(() => {
                 analyzingRef.current.delete(analyzeKey)
             }, 1000)
         }
-    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription, visionModel])
+    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription, visionModel, lmStudioUrl])
 
     const performVideoScan = useCallback(async (video: HTMLVideoElement) => {
+        console.log(`[performVideoScan] Starting scan, enableDeepAnalysis=${enableDeepAnalysis}, visionModel=${visionModel}`)
+        
+        // Check cache first
+        const cacheKey = `video-${video.src || video.currentSrc}`
+        const cached = detectionCacheRef.current.get(cacheKey)
+        if (cached && !enableDeepAnalysis) {
+            console.log(`[performVideoScan] Using cached result`)
+            setDetectionResult(cached)
+            setIsScanning(false)
+            return
+        }
+        
         setIsScanning(true)
         setDetectionResult(null)
 
@@ -159,22 +204,39 @@ export function useScanner(
             return
         }
 
-        const res = await imageScanner.detectImageData(frameData, saveScannedImages, visionModel)
+        const res = await imageScanner.detectImageData(frameData, saveScannedImages, visionModel, visionModel, lmStudioUrl, true)
+        console.log(`[performVideoScan] Detection result:`, res ? `${res.data.length} objects` : 'null')
 
         if (hoveredElement === video) {
             setDetectionResult(res)
             setIsScanning(false)
+            // Cache the result
+            if (res) {
+                const cacheKey = `video-${video.src || video.currentSrc}`
+                detectionCacheRef.current.set(cacheKey, res)
+                // Also store in localStorage for persistence across sessions
+                try {
+                    localStorage.setItem(`ai-scanner-cache-${cacheKey}`, JSON.stringify({
+                        timestamp: Date.now(),
+                        data: res.data
+                    }))
+                } catch (e) { /* ignore storage errors */ }
+            }
             if (res && enableDeepAnalysis) {
+                console.log(`[performVideoScan] Triggering analysis`)
                 triggerDeepAnalysis(res)
+            } else {
+                console.log(`[performVideoScan] Skipping analysis: enableDeepAnalysis=${enableDeepAnalysis}`)
             }
         }
-    }, [captureFrame, saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis, hoveredElement])
+    }, [captureFrame, saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis, hoveredElement, visionModel, lmStudioUrl])
 
     useEffect(() => {
         if (!isActive) {
             setHoveredElement(null)
             setDetectionResult(null)
             if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
+            if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current)
             return
         }
 
@@ -184,24 +246,51 @@ export function useScanner(
             const el = findElementUnderCursor(e)
 
             if (el !== hoveredElement) {
-                setHoveredElement(el)
-                setDetectionResult(null)
-                setIsScanning(false)
-                if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
+                // Cancel any pending clear
+                if (clearTimeoutRef.current) {
+                    clearTimeout(clearTimeoutRef.current)
+                    clearTimeoutRef.current = null
+                }
+
+                // Don't clear if hovering the sidebar (for scrolling)
+                if (!isHoveringSidebar || el) {
+                    setHoveredElement(el)
+                    if (!el) {
+                        // Delay clearing to allow time to travel through bridge to sidebar
+                        clearTimeoutRef.current = setTimeout(() => {
+                            // Double-check we're still not hovering sidebar before clearing
+                            if (!isHoveringSidebar) {
+                                setDetectionResult(null)
+                                setIsScanning(false)
+                                if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
+                            }
+                        }, 400) // 400ms grace period to reach sidebar
+                    }
+                }
 
                 if (el instanceof HTMLImageElement) {
                     const src = imageScanner.getImageSourceKey(el)
+                    currentImageSrcRef.current = src
+                    console.log(`[useScanner] Hovering image: ${src.substring(0, 50)}...`)
                     const cached = imageScanner.getCachedDetection(src)
                     if (cached) {
+                        console.log(`[useScanner] Using cached result with ${cached.data.length} objects`, {
+                            analyses: cached.data.map(d => ({ type: d.type, hasAnalysis: !!d.analysis, analysis: d.analysis?.substring(0, 30) }))
+                        })
                         setDetectionResult(cached)
-                        if (enableDeepAnalysis && cached.data.some(d => {
+                        // Check if any detections need deep analysis
+                        const needsAnalysis = cached.data.filter(d => {
                             const isAnalyzable = (d as any).is_analyzable
                             const isScene = d.type === 'scene'
                             const category = (d as any).category || 'Misc'
                             const threshold = categoryThresholds[category] ?? deepAnalysisThreshold
                             return isAnalyzable && (isScene || (d.confidence >= threshold && !d.analysis))
-                        })) {
+                        })
+                        if (enableDeepAnalysis && needsAnalysis.length > 0) {
+                            console.log(`[useScanner] ${needsAnalysis.length} objects need deep analysis`)
                             triggerDeepAnalysis(cached)
+                        } else if (needsAnalysis.length === 0) {
+                            console.log(`[useScanner] All objects already have analysis, skipping deep analysis`)
                         }
                     } else {
                         setIsScanning(true)
@@ -226,8 +315,9 @@ export function useScanner(
         return () => {
             window.removeEventListener('mousemove', handleMouseMove)
             if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current)
+            if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current)
         }
-    }, [isActive, hoveredElement, findElementUnderCursor, performVideoScan, saveScannedImages, enableDeepAnalysis, categoryThresholds, deepAnalysisThreshold, visionModel])
+    }, [isActive, hoveredElement, findElementUnderCursor, performVideoScan, saveScannedImages, enableDeepAnalysis, categoryThresholds, deepAnalysisThreshold, visionModel, isHoveringSidebar])
 
     const rescan = useCallback(() => {
         if (hoveredElement instanceof HTMLVideoElement) {

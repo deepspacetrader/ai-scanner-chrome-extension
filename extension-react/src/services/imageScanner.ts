@@ -45,7 +45,6 @@ export interface DetectionResult {
 
 export class ImageScannerService {
     private detectionCache = new Map<string, DetectionResult>()
-    private cacheMaxSize = 50
     private failedDetectionCooldowns = new Map<string, number>()
     private detectionRetryDelayMs = 1500
     private isProcessing = false
@@ -79,7 +78,35 @@ export class ImageScannerService {
     }
 
     public getCachedDetection(srcKey: string): DetectionResult | undefined {
-        return this.detectionCache.get(srcKey)
+        // Check memory cache first
+        const cached = this.detectionCache.get(srcKey)
+        if (cached) {
+            console.log(`[ImageScanner] Memory cache hit for ${srcKey.substring(0, 50)}...`)
+            return cached
+        }
+        
+        // Check localStorage for persistent cache
+        try {
+            const stored = localStorage.getItem(`ai-scanner-img-${srcKey}`)
+            if (stored) {
+                const parsed = JSON.parse(stored)
+                // Cache is valid for 5 minutes
+                const age = Date.now() - parsed.timestamp
+                if (age < 5 * 60 * 1000) {
+                    console.log(`[ImageScanner] localStorage cache hit for ${srcKey.substring(0, 50)}... (age: ${(age/1000).toFixed(1)}s)`)
+                    this.detectionCache.set(srcKey, parsed.data)
+                    return parsed.data
+                } else {
+                    console.log(`[ImageScanner] localStorage cache expired for ${srcKey.substring(0, 50)}... (age: ${(age/1000).toFixed(1)}s)`)
+                    localStorage.removeItem(`ai-scanner-img-${srcKey}`)
+                }
+            } else {
+                console.log(`[ImageScanner] Cache miss for ${srcKey.substring(0, 50)}...`)
+            }
+        } catch (e) { 
+            console.warn('[ImageScanner] Error reading cache:', e)
+        }
+        return undefined
     }
 
     public getImageSourceKey(img: HTMLImageElement | Element | null): string {
@@ -109,9 +136,11 @@ export class ImageScannerService {
         // Check cooling down
         if (this.shouldRespectFailureCooldown(srcKey)) return null
 
-        // Check cache
-        if (this.detectionCache.has(srcKey)) {
-            return this.detectionCache.get(srcKey) || null
+        // Check cache (both memory and localStorage)
+        const cached = this.getCachedDetection(srcKey)
+        if (cached) {
+            console.log(`[ImageScanner] Cache hit for ${srcKey.substring(0, 50)}...`)
+            return cached
         }
 
         if (this.isProcessing) return null
@@ -145,7 +174,14 @@ export class ImageScannerService {
         }
     }
 
-    public async detectImageData(base64Data: string, save: boolean = false, visionModel?: string): Promise<DetectionResult | null> {
+    public async detectImageData(
+        base64Data: string, 
+        save: boolean = false, 
+        visionModel?: string, 
+        visionModelProvider?: string, 
+        lmStudioUrl?: string,
+        asyncAnalysis: boolean = true
+    ): Promise<DetectionResult | null> {
         // Ensure settings are loaded
         await this.loadSettings()
         
@@ -155,7 +191,7 @@ export class ImageScannerService {
         try {
             // The key for video frames is transient, so we create a temporary one.
             const transientKey = `videoframe:${Date.now()}`
-            const result = await this.fetchDetection(base64Data, transientKey, save, visionModel)
+            const result = await this.fetchDetection(base64Data, transientKey, save, visionModel, visionModelProvider, lmStudioUrl, asyncAnalysis)
 
             if (result) {
                 result.image = base64Data
@@ -172,15 +208,38 @@ export class ImageScannerService {
         }
     }
 
-    private async fetchDetection(base64: string, _key: string, save: boolean = false, visionModel?: string): Promise<DetectionResult | null> {
+    private async fetchDetection(
+        base64: string, 
+        _key: string, 
+        save: boolean = false, 
+        visionModel?: string, 
+        visionModelProvider?: string, 
+        lmStudioUrl?: string,
+        asyncAnalysis: boolean = true
+    ): Promise<DetectionResult | null> {
         try {
             const visionModelToUse = visionModel || "florence2"
-            console.log(`AI SCANNER DETECT: Using vision model: ${visionModelToUse}`)
+            const integratedModels = ["florence2", "glm4.6v", "samsung-trm"]
+            const isLmStudioVision = visionModelProvider === 'lm_studio' || !integratedModels.includes(visionModelToUse)
+            
+            console.log(`AI SCANNER DETECT: Using vision model: ${visionModelToUse}, provider: ${visionModelProvider || 'auto'}, async: ${asyncAnalysis}`)
+            
+            const requestBody: any = { 
+                image: base64, 
+                save, 
+                vision_model: visionModelToUse,
+                async_analysis: asyncAnalysis  // Enable async analysis for immediate YOLO results
+            }
+            
+            // Add LM Studio URL if using LM Studio vision
+            if (isLmStudioVision) {
+                requestBody.lm_studio_url = lmStudioUrl || this.settings.lmStudioUrl || "http://localhost:1234"
+            }
             
             const response = await fetch(this.settings.detectionEndpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ image: base64, save, vision_model: visionModelToUse })
+                body: JSON.stringify(requestBody)
             })
             if (!response.ok) throw new Error("API Error")
             const apiResponse = await response.json()
@@ -227,6 +286,9 @@ export class ImageScannerService {
                         color: item.color || "#00FF00",
                         type: item.class || item.type || "unknown",
                         analysis: item.analysis,
+                        analysis_pending: item.analysis_pending,
+                        is_analyzable: item.is_analyzable,
+                        category: item.category,
                         model: item.model,
                         confidence: item.confidence || 0,
                         mask: item.mask  // Include mask data if available
@@ -249,38 +311,58 @@ export class ImageScannerService {
         width: number,
         height: number,
         type: string = "person",
-        visionModel: string = "florence2"
-    ): Promise<string | null> {
+        visionModel: string = "florence2",
+        visionModelProvider: string = "integrated",
+        lmStudioUrl: string = "http://localhost:1234"
+    ): Promise<{ analysis: string, model?: string } | null> {
         // Ensure settings are loaded
         await this.loadSettings()
         
         try {
-            console.log(`AI SCANNER: Analyzing box with vision model: ${visionModel}`)
+            // Determine the actual vision model to use
+            const integratedModels = ["florence2", "glm4.6v", "samsung-trm"]
+            let actualVisionModel = visionModel
+            
+            // If using LM Studio provider, the visionModel should already be the LM Studio model name
+            if (visionModelProvider === 'lm_studio' && !integratedModels.includes(visionModel)) {
+                actualVisionModel = visionModel
+            }
+            
+            console.log(`AI SCANNER: Analyzing box with vision model: ${actualVisionModel} (provider: ${visionModelProvider})`)
             console.log(`AI SCANNER: Box coordinates: x=${x}, y=${y}, w=${width}, h=${height}, type=${type}`)
             
-            console.log(`AI SCANNER: Using backend model: ${visionModel}`)
+            console.log(`AI SCANNER: Using backend model: ${actualVisionModel}`)
             console.log(`AI SCANNER: Backend endpoint: ${this.settings.detectionEndpoint}`)
-            // Original Florence2 logic
             const endpoint = this.settings.detectionEndpoint.replace("/api/detect-base64", "/api/analyze-box")
             console.log(`AI SCANNER: Analysis endpoint: ${endpoint}`)
+            
+            const requestBody: any = {
+                image: originalBase64,
+                box: { x, y, width, height },
+                type,
+                vision_model: actualVisionModel
+            }
+            
+            // Add LM Studio URL if using LM Studio vision model
+            if (visionModelProvider === 'lm_studio' || !integratedModels.includes(actualVisionModel)) {
+                requestBody.lm_studio_url = lmStudioUrl || this.settings.lmStudioUrl || "http://localhost:1234"
+            }
             
             const response = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    image: originalBase64,
-                    box: { x, y, width, height },
-                    type,
-                    vision_model: visionModel // Pass the chosen model to the backend
-                })
+                body: JSON.stringify(requestBody)
             })
 
-            if (!response.ok) return "Analysis failed"
+            if (!response.ok) return { analysis: "Analysis failed" }
             const data = await response.json()
-            return data.analysis || "Image analysis failed :("
+            return { 
+                analysis: data.analysis || "Image analysis failed :(",
+                model: data.model
+            }
         } catch (e) {
             console.error("AI SCANNER: Analyze box error", e)
-            return "Analysis error"
+            return { analysis: "Analysis error" }
         }
     }
 
@@ -299,31 +381,74 @@ export class ImageScannerService {
             if (!response.ok) throw new Error("API Error")
             return await response.json()
         } catch (e) {
-            console.error("AI SCANNER: URL Detection API error", e)
             return null
         }
     }
 
-    private cacheResult(key: string, result: DetectionResult) {
-        this.detectionCache.set(key, result)
-        if (this.detectionCache.size > this.cacheMaxSize) {
-            const first = this.detectionCache.keys().next().value
-            if (first) this.detectionCache.delete(first)
-        }
+    private scheduleFailureCooldown(key: string) {
+        this.failedDetectionCooldowns.set(key, Date.now() + this.detectionRetryDelayMs)
     }
 
     private shouldRespectFailureCooldown(key: string): boolean {
-        const cooldown = this.failedDetectionCooldowns.get(key)
-        if (!cooldown) return false
-        if (Date.now() >= cooldown) {
-            this.failedDetectionCooldowns.delete(key)
-            return false
+        const cooldownUntil = this.failedDetectionCooldowns.get(key)
+        if (cooldownUntil && Date.now() < cooldownUntil) {
+            return true
         }
-        return true
+        return false
     }
 
-    private scheduleFailureCooldown(key: string) {
-        this.failedDetectionCooldowns.set(key, Date.now() + this.detectionRetryDelayMs)
+    private cacheResult(key: string, result: DetectionResult) {
+        this.detectionCache.set(key, result)
+        // Also store in localStorage for persistence
+        try {
+            const hasAnalysis = result.data.some(d => d.analysis && d.analysis !== '...')
+            localStorage.setItem(`ai-scanner-img-${key}`, JSON.stringify({
+                timestamp: Date.now(),
+                data: result
+            }))
+            console.log(`[ImageScanner] Cached result for ${key.substring(0, 50)}...`, {
+                objects: result.data.length,
+                hasAnalysis,
+                analyses: result.data.map(d => ({ type: d.type, hasAnalysis: !!d.analysis, analysis: d.analysis?.substring(0, 30) }))
+            })
+        } catch (e) { 
+            console.warn('[ImageScanner] Failed to cache result:', e)
+        }
+    }
+
+    /**
+     * Update an existing cached result with new data (e.g., after analysis completes)
+     * This preserves the original cache timestamp to extend its lifetime
+     */
+    public updateCachedResult(key: string, result: DetectionResult): boolean {
+        // Only update if we have this in cache
+        if (!this.detectionCache.has(key) && !localStorage.getItem(`ai-scanner-img-${key}`)) {
+            return false
+        }
+        
+        this.detectionCache.set(key, result)
+        
+        // Update localStorage while preserving the original timestamp
+        try {
+            const existing = localStorage.getItem(`ai-scanner-img-${key}`)
+            const originalTimestamp = existing ? JSON.parse(existing).timestamp : Date.now()
+            
+            localStorage.setItem(`ai-scanner-img-${key}`, JSON.stringify({
+                timestamp: originalTimestamp,
+                data: result
+            }))
+            
+            const hasAnalysis = result.data.some(d => d.analysis && d.analysis !== '...')
+            console.log(`[ImageScanner] Updated cached result for ${key.substring(0, 50)}...`, {
+                objects: result.data.length,
+                hasAnalysis,
+                analyses: result.data.map(d => ({ type: d.type, hasAnalysis: !!d.analysis }))
+            })
+            return true
+        } catch (e) { 
+            console.warn('[ImageScanner] Failed to update cache:', e)
+            return false
+        }
     }
 
     /**

@@ -4,13 +4,15 @@ import { type SummarySettings, textSummarizer } from '../services/textSummarizer
 
 export function useVideoScanner(
     isActive: boolean,
+    isHoveringSidebar: boolean = false,
     saveScannedImages: boolean = false,
     enableDeepAnalysis: boolean = false,
     enableEnhancedDescription: boolean = true,
     deepAnalysisThreshold: number = 0.85,
     categoryThresholds: Record<string, number> = {},
     summarySettings?: SummarySettings,
-    visionModel: string = 'florence2'
+    visionModel: string = 'florence2',
+    lmStudioUrl: string = 'http://localhost:1234'
 ) {
     const [hoveredVideo, setHoveredVideo] = useState<HTMLVideoElement | null>(null)
     const hoveredVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -18,6 +20,9 @@ export function useVideoScanner(
     const [isScanning, setIsScanning] = useState(false)
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
     const analyzingRef = useRef<Set<string>>(new Set())
+    const clearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    // Cache for detection results with analysis
+    const detectionCacheRef = useRef<Map<string, DetectionResult>>(new Map())
 
     // Find video under cursor
     const findVideoUnderCursor = useCallback((e: MouseEvent) => {
@@ -47,7 +52,9 @@ export function useVideoScanner(
             const category = (d as any).category || "Misc"
             const threshold = categoryThresholds[category] ?? deepAnalysisThreshold
             const isAnalyzable = (d as any).is_analyzable
-            return isAnalyzable && d.confidence >= threshold && !d.analysis
+            const analysisPending = (d as any).analysis_pending
+            // Include objects with analysis_pending flag or empty analysis
+            return isAnalyzable && d.confidence >= threshold && (analysisPending || !d.analysis)
         })
 
         if (targets.length === 0) return
@@ -64,7 +71,7 @@ export function useVideoScanner(
                     const category = (d as any).category || "Misc"
                     const threshold = categoryThresholds[category] ?? deepAnalysisThreshold
                     const isAnalyzable = (d as any).is_analyzable
-                    return (isAnalyzable && d.confidence >= threshold && !d.analysis) ? { ...d, analysis: '...' } : d
+                    return (isAnalyzable && d.confidence >= threshold && ((d as any).analysis_pending || !d.analysis)) ? { ...d, analysis: '...' } : d
                 })
             }
         })
@@ -78,21 +85,23 @@ export function useVideoScanner(
                     target.width,
                     target.height,
                     target.type,
-                    visionModel
-                ) as any
+                    visionModel,
+                    visionModel,
+                    lmStudioUrl
+                )
 
                 if (!visionResult) return
 
-                let finalAnalysis = visionResult.analysis || visionResult
-                let analysisModel = visionResult.model || (visionModel === 'glm4.6v' ? 'Qwen2-VL' : 'Florence-2')
+                let finalAnalysis = visionResult.analysis
+                let analysisModel = visionResult.model || visionModel
 
                 const isAnalyzable = (target as any).is_analyzable
-                const isHighFidelity = analysisModel.includes('Samsung') || analysisModel.includes('Qwen2-VL')
+                const isHighFidelity = analysisModel.includes('Samsung') || analysisModel.includes('Qwen2-VL') || visionModel.includes('gemma') || visionModel.includes('LM Studio')
 
-                if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.startsWith('Error') && summarySettings && !isHighFidelity) {
+                if (enableEnhancedDescription && isAnalyzable && visionResult && !visionResult.analysis.startsWith('Error') && summarySettings && !isHighFidelity) {
                     try {
                         const refinedResult = await textSummarizer.summarize(
-                            visionResult,
+                            visionResult.analysis,
                             {
                                 ...summarySettings,
                                 mode: 'refine',
@@ -126,9 +135,10 @@ export function useVideoScanner(
                 analyzingRef.current.delete(analyzeKey)
             }, 1000)
         }
-    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription, visionModel])
+    }, [deepAnalysisThreshold, categoryThresholds, summarySettings, enableEnhancedDescription, visionModel, lmStudioUrl])
 
     const performScan = useCallback(async (video: HTMLVideoElement) => {
+        console.log(`[VideoScanner performScan] Starting, enableDeepAnalysis=${enableDeepAnalysis}, visionModel=${visionModel}`)
         setIsScanning(true)
         setDetectionResult(null)
 
@@ -138,18 +148,34 @@ export function useVideoScanner(
             return
         }
 
-        const res = await imageScanner.detectImageData(frameData, saveScannedImages, visionModel)
+        const res = await imageScanner.detectImageData(frameData, saveScannedImages, visionModel, visionModel, lmStudioUrl, true)
+        console.log(`[VideoScanner performScan] Got ${res?.data?.length || 0} objects`)
 
         // Only update if we are still hovering the same video
         if (video === hoveredVideoRef.current) {
             setDetectionResult(res)
             setIsScanning(false)
+            // Cache the result with analysis
+            if (res) {
+                const cacheKey = `video-${video.src || video.currentSrc}`
+                detectionCacheRef.current.set(cacheKey, res)
+                // Also persist to localStorage
+                try {
+                    localStorage.setItem(`ai-scanner-cache-${cacheKey}`, JSON.stringify({
+                        timestamp: Date.now(),
+                        data: res.data
+                    }))
+                } catch (e) { /* ignore storage errors */ }
+            }
 
             if (res && enableDeepAnalysis) {
+                console.log(`[VideoScanner performScan] Triggering analysis`)
                 triggerDeepAnalysis(res)
+            } else {
+                console.log(`[VideoScanner performScan] Skipping analysis: enableDeepAnalysis=${enableDeepAnalysis}`)
             }
         }
-    }, [saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis, visionModel])
+    }, [saveScannedImages, enableDeepAnalysis, triggerDeepAnalysis, visionModel, lmStudioUrl])
 
     useEffect(() => {
         if (!isActive) {
@@ -157,6 +183,7 @@ export function useVideoScanner(
             hoveredVideoRef.current = null
             setDetectionResult(null)
             setIsScanning(false)
+            if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current)
             return
         }
 
@@ -167,21 +194,56 @@ export function useVideoScanner(
             // Case 1: We found a paused video
             if (video && video.paused) {
                 // Is it a new paused video?
-                if (video !== hoveredVideoRef.current) {
+                if (video === hoveredVideoRef.current) {
+                    // Same video, do nothing (already scanned or cached)
+                } else {
                     hoveredVideoRef.current = video
                     setHoveredVideo(video)
-                    performScan(video) // Scan immediately
+                    // Check cache first before scanning
+                    const cacheKey = `video-${video.src || video.currentSrc}`
+                    const cached = detectionCacheRef.current.get(cacheKey) || (() => {
+                        try {
+                            const stored = localStorage.getItem(`ai-scanner-cache-${cacheKey}`)
+                            if (stored) {
+                                const parsed = JSON.parse(stored)
+                                // Check if cache is fresh (less than 5 minutes old)
+                                if (Date.now() - parsed.timestamp < 5 * 60 * 1000) {
+                                    return { data: parsed.data } as DetectionResult
+                                }
+                            }
+                        } catch (e) { /* ignore */ }
+                        return null
+                    })()
+                    if (cached && cached.data?.length > 0) {
+                        console.log(`[useVideoScanner] Restoring from cache`)
+                        setDetectionResult(cached)
+                    } else {
+                        performScan(video) // Scan immediately
+                    }
                 }
                 // If it's the same paused video, do nothing. We've already scanned it.
             }
             // Case 2: No video, or a playing video
             else {
                 // Did we *just* move off a video?
-                if (hoveredVideoRef.current) {
-                    hoveredVideoRef.current = null
-                    setHoveredVideo(null)
-                    setDetectionResult(null)
-                    setIsScanning(false)
+                // Cancel any pending clear
+                if (clearTimeoutRef.current) {
+                    clearTimeout(clearTimeoutRef.current)
+                    clearTimeoutRef.current = null
+                }
+
+                // Don't clear if hovering the sidebar (for scrolling)
+                if (hoveredVideoRef.current && !isHoveringSidebar) {
+                    // Delay clearing to allow time to travel through bridge to sidebar
+                    clearTimeoutRef.current = setTimeout(() => {
+                        // Double-check we're still not hovering sidebar before clearing
+                        if (!isHoveringSidebar) {
+                            hoveredVideoRef.current = null
+                            setHoveredVideo(null)
+                            setDetectionResult(null)
+                            setIsScanning(false)
+                        }
+                    }, 400) // 400ms grace period to reach sidebar
                 }
             }
         }
@@ -189,8 +251,9 @@ export function useVideoScanner(
         window.addEventListener('mousemove', handleMouseMove)
         return () => {
             window.removeEventListener('mousemove', handleMouseMove)
+            if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current)
         }
-    }, [isActive, findVideoUnderCursor, performScan])
+    }, [isActive, findVideoUnderCursor, performScan, isHoveringSidebar])
 
     return {
         hoveredVideo,

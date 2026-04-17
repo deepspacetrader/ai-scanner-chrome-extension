@@ -17,9 +17,11 @@ export interface Settings {
     enableSound: boolean;
     soundVolume: number;
     visionModel: string;
+    visionModelProvider: 'integrated' | 'lm_studio';
     summarizationModelProvider: 'integrated' | 'lm_studio';
     lmStudioModel: string;
     lmStudioUrl: string;
+    lmStudioVisionModel: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -52,7 +54,9 @@ export const DEFAULT_SETTINGS: Settings = {
     enableSound: true,
     soundVolume: 1,
     visionModel: 'florence2',
+    visionModelProvider: 'integrated',
     summarizationModelProvider: 'integrated',
     lmStudioModel: '',
-    lmStudioUrl: 'http://localhost:1234'
+    lmStudioUrl: 'http://localhost:1234',
+    lmStudioVisionModel: ''
 };
