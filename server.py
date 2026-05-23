@@ -485,9 +485,11 @@ async def detect_objects_base64(request: Dict[str, Any]):
 
         # Get vision model from request
         vision_model = request.get("vision_model", "florence2")
+        lm_studio_url = request.get("lm_studio_url", "http://localhost:1234")
+        async_analysis = request.get("async_analysis", True)  # Default to async for better UX
         
-        # Process results fast - handle both detection and segmentation
-        detections = await process_detections(image, results, deep_analysis=True, vision_model=vision_model)
+        # Process results - run detection immediately, vision analysis async if enabled
+        detections = await process_detections(image, results, deep_analysis=True, vision_model=vision_model, lm_studio_url=lm_studio_url, async_analysis=async_analysis)
 
         # Debug: Log if we have masks in the detections
         has_masks = any(det.get("mask") is not None for det in detections)
@@ -549,9 +551,11 @@ async def detect_objects_url(request: Dict[str, Any]):
 
         # Get vision model from request
         vision_model = request.get("vision_model", "florence2")
+        lm_studio_url = request.get("lm_studio_url", "http://localhost:1234")
+        async_analysis = request.get("async_analysis", True)  # Default to async for better UX
         
-        # Process results fast - handle both detection and segmentation
-        detections = await process_detections(image, results, deep_analysis=True, vision_model=vision_model)
+        # Process results - run detection immediately, vision analysis async if enabled
+        detections = await process_detections(image, results, deep_analysis=True, vision_model=vision_model, lm_studio_url=lm_studio_url, async_analysis=async_analysis)
 
         response = {
             "type": "segmentation" if current_model_type == "segmentation" else "detection",
@@ -570,6 +574,67 @@ async def detect_objects_url(request: Dict[str, Any]):
         logger.error(f"URL detection error: {e}")
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
 
+async def run_lm_studio_vision_analysis(image: Image.Image, prompt: str, model_name: str, lm_studio_url: str = "http://localhost:1234"):
+    """Analyze an image using LM Studio vision model via API"""
+    try:
+        # Convert image to base64
+        import base64
+        from io import BytesIO
+        
+        # Ensure RGB format
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        
+        # Convert to base64
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        
+        # Build the request payload for LM Studio vision API
+        # Use native LM Studio /api/v1/chat endpoint with 'input' field for vision
+        lm_studio_endpoint = f"{lm_studio_url}/api/v1/chat"
+        
+        payload = {
+            "model": model_name,
+            "input": [
+                {"type": "text", "content": prompt},
+                {"type": "image", "data_url": f"data:image/png;base64,{img_base64}"}
+            ],
+            "temperature": 0.7
+        }
+        
+        logger.info(f"Calling LM Studio vision API at {lm_studio_endpoint} with model {model_name}")
+        
+        response = requests.post(lm_studio_endpoint, json=payload, timeout=60)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Extract the response from various possible formats
+        if "choices" in data and len(data["choices"]) > 0:
+            message = data["choices"][0].get("message", {})
+            content = message.get("content", "")
+        elif "output" in data:
+            # LM Studio's native format
+            output = data["output"]
+            if isinstance(output, list):
+                content = " ".join([item.get("content", "") for item in output if item.get("type") == "message"])
+            elif isinstance(output, str):
+                content = output
+            else:
+                content = str(output)
+        else:
+            content = data.get("response", data.get("text", "No response"))
+        
+        return {"analysis": content.strip(), "model": model_name}
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"LM Studio vision API call failed: {e}")
+        return {"analysis": f"Error: LM Studio connection failed ({str(e)[:50]})...", "model": model_name}
+    except Exception as e:
+        logger.error(f"LM Studio vision analysis failed: {e}")
+        return {"analysis": f"Error: Analysis failed ({str(e)[:50]})...", "model": model_name}
+
 @app.post("/api/analyze-box")
 async def analyze_box(request: Dict[str, Any]):
     """
@@ -577,8 +642,11 @@ async def analyze_box(request: Dict[str, Any]):
     """
     global florence_model, florence_processor
     
-    # Lazy load Florence model if needed
+    # Get vision model from request
     vision_model = request.get("vision_model", "florence2")
+    lm_studio_url = request.get("lm_studio_url", "http://localhost:1234")
+    
+    # Lazy load models only for integrated vision models
     if vision_model in ["florence2", "samsung-trm"]:
         florence_model, florence_processor = load_florence_model()
     elif vision_model in ["glm4.6v"]:
@@ -611,7 +679,7 @@ async def analyze_box(request: Dict[str, Any]):
         
         # Determine the best prompt based on object type
         obj_type = request.get("type", "person")
-        logger.info(f"Analyzing box: type={obj_type}, size={int(w)}x{int(h)}")
+        logger.info(f"Analyzing box: type={obj_type}, size={int(w)}x{int(h)}, model={vision_model}")
         
         # Mapping for targeted questions from centralized config
         config = OBJECT_CONFIG.get(obj_type, {
@@ -623,11 +691,16 @@ async def analyze_box(request: Dict[str, Any]):
         task = config["task"]
         hint = config["prompt"]
         
-        # New: Model selection
-        vision_model = request.get("vision_model", "florence2")
-        logger.info(f"Analyzing box with model: {vision_model}")
+        # Check if using LM Studio vision model (any model name not in integrated list)
+        integrated_models = ["florence2", "glm4.6v", "samsung-trm"]
         
-        if vision_model == "glm4.6v":
+        if vision_model not in integrated_models:
+            # Using LM Studio vision model - use concise prompt like Florence-2
+            lm_vision_prompt = config.get("llm_query") or f"What/who is this? Identify if possible. Be concise."
+            lm_res = await run_lm_studio_vision_analysis(cropped_image, lm_vision_prompt, vision_model, lm_studio_url)
+            analysis_text = lm_res["analysis"]
+            used_model = lm_res["model"]
+        elif vision_model == "glm4.6v":
             # GLM 4.6V (Qwen2-VL) prefers specific prompts
             glm_prompt = config.get("llm_query") or f"Describe this {obj_type} in detail."
             glm_res = await run_glm_analysis(cropped_image, glm_prompt)
@@ -1205,11 +1278,16 @@ def process_mask_data(masks, i, x1, y1, x2, y2, img_width, img_height):
     
     return mask_info
 
-async def process_detections(image, results, deep_analysis=False, vision_model="florence2"):
-    """Helper to process YOLO results and optionally run Florence-2 analysis"""
+async def process_detections(image, results, deep_analysis=False, vision_model="florence2", lm_studio_url="http://localhost:1234", async_analysis=False):
+    """Helper to process YOLO results and optionally run vision analysis
+    
+    Args:
+        async_analysis: If True, skip vision analysis and return detections immediately.
+                       Analysis will be done separately via /api/analyze-box.
+    """
     global florence_model, florence_processor, vision_model_obj, vision_processor_obj
     
-    logger.info(f"process_detections called with deep_analysis={deep_analysis}")
+    logger.info(f"process_detections called with deep_analysis={deep_analysis}, vision_model={vision_model}, async_analysis={async_analysis}")
     
     # Lazy load vision model if needed for deep analysis
     if deep_analysis:
@@ -1253,8 +1331,15 @@ async def process_detections(image, results, deep_analysis=False, vision_model="
                     is_analyzable = config.get("is_analyzable", False)
 
                     analysis_text = ""
-                    logger.info(f"Analysis check: deep_analysis={deep_analysis}, is_analyzable={is_analyzable}, confidence={confidence}, vision_model={vision_model}")
-                    if deep_analysis and is_analyzable and confidence > 0.75:
+                    analysis_pending = False
+                    logger.info(f"Analysis check: deep_analysis={deep_analysis}, is_analyzable={is_analyzable}, confidence={confidence}, vision_model={vision_model}, async_analysis={async_analysis}")
+                    
+                    # Mark for async analysis if enabled
+                    if async_analysis and deep_analysis and is_analyzable and confidence > 0.75:
+                        analysis_pending = True
+                        logger.info(f"Marking {class_name} for async analysis")
+                    # Run synchronous analysis only if not in async mode
+                    elif deep_analysis and is_analyzable and confidence > 0.75:
                         logger.info(f"Starting {vision_model} analysis for {class_name} with confidence {confidence}")
                         try:
                             pad = 40
@@ -1287,16 +1372,24 @@ async def process_detections(image, results, deep_analysis=False, vision_model="
                                     analysis_text = await run_samsung_trm_analysis(person_image, f"Analyze this {class_name} in detail.")
                                     
                                 else:
-                                    # Default to Florence-2 for unknown models
-                                    logger.warning(f"Unknown vision model: {vision_model}, defaulting to Florence-2")
-                                    florence_results = await run_florence_analysis(person_image, "<DETAILED_CAPTION>")
-                                    
-                                    if "<DETAILED_CAPTION>" in florence_results:
-                                        analysis_text = florence_results["<DETAILED_CAPTION>"]
-                                    elif "<CAPTION>" in florence_results:
-                                        analysis_text = florence_results["<CAPTION>"]
+                                    # Check if it's an LM Studio vision model (not in integrated list)
+                                    integrated_models = ['florence2', 'glm4.6v', 'samsung-trm']
+                                    if vision_model not in integrated_models:
+                                        # Use LM Studio vision API - concise prompt like Florence-2
+                                        lm_prompt = f"What/who is this {class_name}? Identify if possible. Be concise."
+                                        lm_res = await run_lm_studio_vision_analysis(person_image, lm_prompt, vision_model, lm_studio_url)
+                                        analysis_text = lm_res["analysis"]
                                     else:
-                                        analysis_text = next(iter(florence_results.values())) if florence_results else "No caption"
+                                        # Default to Florence-2 for unknown models
+                                        logger.warning(f"Unknown vision model: {vision_model}, defaulting to Florence-2")
+                                        florence_results = await run_florence_analysis(person_image, "<DETAILED_CAPTION>")
+                                        
+                                        if "<DETAILED_CAPTION>" in florence_results:
+                                            analysis_text = florence_results["<DETAILED_CAPTION>"]
+                                        elif "<CAPTION>" in florence_results:
+                                            analysis_text = florence_results["<CAPTION>"]
+                                        else:
+                                            analysis_text = next(iter(florence_results.values())) if florence_results else "No caption"
                                 
                                 logger.info(f"{vision_model} analysis: {analysis_text}")
                         except Exception as e:
@@ -1307,6 +1400,7 @@ async def process_detections(image, results, deep_analysis=False, vision_model="
                         "class": class_name,
                         "confidence": float(round(confidence, 3)),
                         "analysis": analysis_text,
+                        "analysis_pending": analysis_pending,
                         "color": color, 
                         "is_analyzable": is_analyzable,
                         "category": config.get("category", "Misc"),
@@ -1340,6 +1434,7 @@ async def process_detections(image, results, deep_analysis=False, vision_model="
             "color": det["color"],
             "type": det["class"],
             "analysis": det["analysis"],
+            "analysis_pending": det.get("analysis_pending", False),
             "confidence": float(det["confidence"]),
             "is_analyzable": det.get("is_analyzable", False),
             "category": det.get("category", "Misc")

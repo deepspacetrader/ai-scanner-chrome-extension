@@ -396,6 +396,18 @@ function App() {
                 >
                   Gemma-4-e4b (LM Studio)
                 </div>
+                <div
+                  className={`theme-option ${settings.visionModel === 'nvidia/nemotron-3-nano-omni' ? 'selected' : ''}`}
+                  onClick={() => {
+                    handleChange('visionModel', 'nvidia/nemotron-3-nano-omni');
+                    if (chrome?.storage?.sync) {
+                      chrome.storage.sync.set({ ...settings, visionModel: 'nvidia/nemotron-3-nano-omni' });
+                    }
+                  }}
+                  style={{ fontSize: '11px' }}
+                >
+                  Nemotron-3-Nano (LM Studio)
+                </div>
               </div>
             </div>
 

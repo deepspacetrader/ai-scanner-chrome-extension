@@ -50,6 +50,15 @@ A high-performance, aesthetically-driven browser extension and backend server fo
 
 # **Note: This project requires approximately 8-10 GB of disk space for models, weights, node modules and python dependencies. So please make sure you have enough space.**
 
+### Default Hotkeys ###
+```
+Alt (toggles AI Scanner HUD on and off)
+```
+```
+Ctrl (toggle to keep results open when hovering off the image)
+```
+
+
 ### 1. Prerequisites
 - **NVIDIA GPU**: Highly recommended for real-time performance (e.g., RTX 30-series or 40-series) *might work on GPU cards with at least 6GB VRAM.*
 - **Python 3.12** (only tested with 3.12)
@@ -77,19 +86,6 @@ mkdir images
 py -3.12 server.py
 # Server will start on http://localhost:8001
 ```
-
-### 2b. Optional: Auto-start server when you first scan
-To avoid running `py -3.12 server.py` every time, run the **launcher** once (or add it to Windows Startup). The extension will then ask the launcher to start the server automatically when you first scan an image or summarize text.
-
-```bash
-# Run the launcher (leave it running in the background)
-py -3.12 launcher.py
-# Listens on http://localhost:8766 — first scan/summarize will start server.py for you
-```
-
-You can add `py -3.12 launcher.py` to Windows Startup (e.g. create a shortcut in `Shell:Startup`) so the launcher is always available.
-
-**Freeing memory when you're done:** The server **auto-stops after 20 minutes** with no API requests so GPU/RAM is free for other models. You can also click **Stop server** in the extension popup to ask the launcher to stop the server immediately (only works if the server was started by the launcher).
 
 ### 3. Setup the Extension
 ```bash
